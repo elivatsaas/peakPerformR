@@ -1,0 +1,48 @@
+Package: peakPerformR
+Title: Cross-Sport Analysis of Peak Performance Age Using Spline Models
+Version: 0.0.0.9000
+Authors@R: 
+    person("First", "Last", , "first.last@example.com", role = c("aut", "cre"))
+Description: Analyzes player performance data across multiple sports to identify
+    peak performance ages and career trajectories. The package provides tools to
+    build, process, and visualize data from various sports leagues including MLB,
+    NFL, NBA, NHL, MLS, PWHL, NWSL, WNBA, and chess.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
+Depends: 
+    R (>= 3.5)
+LazyData: true
+LazyDataCompression: xz
+Imports:
+    dplyr,
+    purrr,
+    tidyr,
+    cluster,
+    ggplot2,
+    grDevices,
+    stringr,
+    lubridate,
+    httr,
+    jsonlite,
+    stats,
+    baseballr,
+    fastRhockey,
+    hoopR, 
+    itscalledsoccer,
+    magrittr,
+    nflreadr,
+    wehoop
+Suggests:
+    countrycode,
+    furrr,
+    graphics,
+    pacman,
+    progress,
+    readr,
+    rvest,
+    utils,
+    WikidataR,
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3

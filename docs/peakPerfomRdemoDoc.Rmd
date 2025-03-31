@@ -1,0 +1,153 @@
+---
+title: "peakPerformR: Athlete Prime Analysis Package"
+author: "Jacob Berlin and Eli Vatsaas"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(peakPerformR)
+library(dplyr)
+library(ggplot2)
+```
+
+## Introduction
+
+
+## Building Sports Data
+
+First, let's build data for all sports using the cached data available in the package:
+
+```{r build_data}
+# Build all sports data
+all_sports <- build_all_sports()
+# Display summary of available sports data
+summary(all_sports)
+```
+
+```{r filter_players}
+players_with_sufficient_data <- all_sports %>%
+  group_by(id) %>%
+  summarize(num_seasons = n_distinct(season),
+            player_name = first(player_name)) %>%
+  filter(num_seasons >= 5) %>%
+  select(player_name, id)
+print(paste("Number of players with 5+ seasons:", length(players_with_sufficient_data$player_name)))
+filtered_data <- all_sports %>%
+  filter(id %in% players_with_sufficient_data$id)
+```
+## Processing Player Trajectories
+
+Now, let's process player trajectories with specific filters:
+
+```{r process_trajectories,message=FALSE, warnings=FALSE}
+# Apply filters for player trajectories
+player_trajectories <- process_player_trajectories(filtered_data)
+# View the first few trajectories
+head(player_trajectories$trajectories)
+
+# Count successful models by sport
+model_counts <- player_trajectories$models %>%
+  left_join(filtered_data %>% select(id, league) %>% distinct(), by="id") %>%
+  group_by(league) %>%
+  summarize(
+    total_players = n(),
+    successful_models = sum(fit_success),
+    success_rate = round(successful_models/total_players*100, 1)
+  )
+
+print(model_counts)
+```
+## Identifying Prime Years
+After processing trajectories, we can identify prime years for each athlete using the identify_prime() function. This determines when an athlete's performance was above a specified threshold relative to their peak:
+```{r identify-prime}
+# Create data for identify_prime function
+player_joins <- player_trajectories$trajectories %>%
+  left_join(filtered_data %>% select(id, league, position, age, games_played), 
+            by = c("id", "age"))
+
+# Identify prime years using predicted trajectory data
+player_primes_pct <- identify_prime(
+  player_joins, 
+  method = "predicted", 
+  threshold_pct = 70,  # 70% of peak performance
+  games_pct_threshold = 40  # Threshold for games played
+)
+
+# View the first few results
+head(player_primes_pct)
+
+# Count athletes by prime duration
+prime_duration_counts <- player_primes_pct %>%
+  mutate(prime_duration_rounded = round(prime_duration)) %>%
+  group_by(prime_duration_rounded) %>%
+  summarize(count = n()) %>%
+  arrange(prime_duration_rounded)
+
+print(prime_duration_counts)
+```
+## Clustering season performance and Creating Performance Metrics
+To prepare our data for PQI calculation, we need to create a performance dataset and add metrics like tier scores and in-prime flags:
+```{r cluster}
+# Assuming you have a cluster_data object from clustering analysis
+# For this example, we'll create a simplified version
+cluster_data <- filtered_data %>%
+  group_by(id) %>%
+  summarize(
+    cluster = sample(1:3, 1),  # Random cluster for demonstration
+    .groups = "drop"
+  )
+
+# Create performance dataset
+player_data <- create_player_performance_dataset(
+  sports_data = filtered_data,
+  prime_data = player_primes_pct,
+  cluster_data = cluster_data
+)
+
+# View the structure
+str(player_data[, 1:15])  # Show first 15 columns
+
+# Examine in_prime distribution
+prime_summary <- player_data %>%
+  group_by(id) %>%
+  summarize(
+    total_seasons = n(),
+    prime_seasons = sum(in_prime, na.rm = TRUE),
+    prime_pct = round(prime_seasons/total_seasons*100, 1)
+  ) %>%
+  arrange(desc(prime_pct))
+
+head(prime_summary)
+```
+## Calculating Prime Quality Index (PQI)
+Now we can process the prime metrics and calculate the Prime Quality Index (PQI), which quantifies an athlete's career value based on prime performance:
+```{r pqi}
+# Process player primes to get aggregated metrics
+processed_data <- process_player_primes(player_data)
+
+# Calculate PQI scores
+pqi <- calculate_prime_quality_index(
+  processed_data,
+  nfl_by_position = TRUE,  # Use position-specific normalization for NFL
+  exclude_positions = c("OL"),  # Exclude certain positions
+  save_output = FALSE
+)
+
+# Show top players by PQI score
+top_players <- pqi %>%
+  select(id, player_name, league, position, pqi_selected, prime_tier) %>%
+  arrange(desc(pqi_selected)) %>%
+  head(10)
+
+print(top_players)
+
+# Distribution of PQI tiers by league
+tier_distribution <- pqi %>%
+  group_by(league, prime_tier) %>%
+  summarize(count = n(), .groups = "drop") %>%
+  arrange(league, prime_tier)
+
+print(tier_distribution)
+```

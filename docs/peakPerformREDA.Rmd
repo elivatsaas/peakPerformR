@@ -1,0 +1,830 @@
+---
+title: "peakPerformR EDA"
+author: "Eli Vatsaas and Jacob Berlin"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: false
+  html_document:
+    toc: true
+    toc_float: true
+    theme: cosmo
+    code_folding: hide
+  word_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE, 
+  warning = FALSE,
+  fig.width = 10, 
+  fig.height = 8,
+  dpi = 300
+)
+
+# Load required libraries
+library(tidyverse)
+library(ggridges)
+library(patchwork)
+library(knitr)
+library(gridExtra)
+library(ggplot2)
+library(ggrepel)
+library(peakPerformR)
+```
+
+
+```{r data-prep, echo=FALSE}
+league_color_mapping <- c(
+  "CHESS_M" = "#3b243e",
+  "CHESS_F" = "#3f375d",
+  "MLS" = "#bf98c5",
+  "NWSL" = "#ddc8e3",
+  "NHL" = "#6389b5",
+  "PWHL" = "#a8bede",
+  "NBA" = "#6d1945",
+  "WNBA" = "#c54d71",
+  "MLB" = "#e48a5f",
+  "NFL" = "#8a8c4c"
+)
+tier_color_mapping <- c(
+  "Hall of Fame" = "#6d1945",
+  "Elite Player" = "#c54d71",
+  "Great Starter" = "#ddc8e3",
+  "Starter" = "#a8bede", 
+  "Backup" = "#6389b5"
+)
+
+league_order <- names(league_color_mapping)
+tier_order <- names(tier_color_mapping)
+
+order_leagues <- function(df) {
+  df$league <- factor(df$league, levels = league_order)
+  return(df)
+}
+
+order_tiers <- function(df, tier_col = "selected_tier") {
+  df[[tier_col]] <- factor(df[[tier_col]], levels = tier_order)
+  return(df)
+}
+
+# Build the main sports dataset
+sports <- build_all_sports() |>
+  filter(league != "PWHL")
+
+# Calculate debut ages
+debut_ages <- sports |>
+  dplyr::group_by(id) |>
+  dplyr::summarise(
+    debut_age = age[which.min(season)]
+  ) |>
+  dplyr::ungroup()
+
+# Filter for eligible players
+eligible_players <- debut_ages |>
+  dplyr::filter(debut_age <= 23) |>
+  dplyr::select(id)
+
+# Filter sports data
+sports <- sports |>
+  dplyr::inner_join(eligible_players, by = "id") |>
+  dplyr::filter(age >= 18)
+
+# Use your existing process_player_trajectories function
+results <- process_player_trajectories(
+  player_data = sports,  # Your sports dataset
+  min_knots = 3,
+  max_knots = 8
+)
+
+# Extract just the trajectories for further processing
+player_trajectories <- results$trajectories 
+
+# Now use the trajectories to identify prime years
+player_primes_pct <- identify_prime(
+  player_trajectories |>
+    dplyr::left_join(sports |> dplyr::select(id, league, position, age, games_played), 
+                   by = c("id", "age")),
+  method = "predicted",
+  threshold_pct = 70
+)
+
+# Identify prime periods from actual player values
+player_prime_actual <- identify_prime(
+  sports,
+  method = "actual",
+  threshold_pct = 70
+)
+
+# Filter to only include eligible players
+player_primes_pct <- player_primes_pct |>
+  dplyr::inner_join(eligible_players, by = "id")
+
+# Cluster player performance
+cluster_data <- cluster_player_performance(
+  player_trajectories = player_trajectories,
+  sports_data = sports,
+  max_debut_age = 23,
+  min_age = 18,
+  num_clusters = 5
+)
+
+# Create the player performance dataset
+player_data <- create_player_performance_dataset(
+  sports_data = sports,
+  prime_data = player_primes_pct,
+  cluster_data = cluster_data
+)
+
+processed_data <- process_player_primes(player_data)
+
+# Calculate PQI scores
+pqi <- calculate_prime_quality_index(
+  processed_data,
+  nfl_by_position = TRUE,
+  exclude_positions = c("OL"),
+  save_output = FALSE
+)
+
+# Join with player info to get league data
+player_primes_pct_with_info <- player_primes_pct |>
+  dplyr::left_join(
+    sports |> 
+      dplyr::select(id, player_name) |>
+      dplyr::distinct(), 
+    by = "id"
+  ) |>
+  dplyr::filter(!is.na(league))
+player_primes_pct_with_info <- order_leagues(player_primes_pct_with_info)
+
+# Calculate league-specific prime ranges
+league_primes <- player_primes_pct_with_info |>
+  dplyr::group_by(league) |>
+  dplyr::summarize(
+    avg_start_age = mean(start_age),
+    median_start_age = median(start_age),
+    avg_end_age = mean(end_age),
+    median_end_age = median(end_age),
+    avg_duration = mean(prime_duration),
+    median_duration = median(prime_duration),
+    start_age_25th = quantile(start_age, 0.25),
+    start_age_75th = quantile(start_age, 0.75),
+    end_age_25th = quantile(end_age, 0.25),
+    end_age_75th = quantile(end_age, 0.75)
+  )
+league_primes <- order_leagues(league_primes)
+
+# Get all ages in prime periods for background
+all_prime_ages <- player_primes_pct_with_info |>
+  # Expand each player's prime into individual ages
+  dplyr::rowwise() |>
+  dplyr::mutate(ages = list(start_age:end_age)) |>
+  tidyr::unnest(ages) |>
+  # Count players at each age
+  dplyr::group_by(league, ages) |>
+  dplyr::summarize(count = dplyr::n(), .groups = "drop")
+
+all_prime_ages <- order_leagues(all_prime_ages)
+
+# Count players at each age
+prime_age_counts <- player_primes_pct_with_info |>
+  # Expand each player's prime into individual ages
+  dplyr::rowwise() |>
+  dplyr::mutate(prime_ages = list(start_age:end_age)) |>
+  tidyr::unnest(prime_ages) |>
+  # Count players at each age by league
+  dplyr::count(league, prime_ages)
+prime_age_counts <- order_leagues(prime_age_counts)
+
+# Create age-specific player counts
+age_league_counts <- player_primes_pct_with_info |>
+  # Get start and end point counts
+  dplyr::group_by(league, age = start_age) |>
+  dplyr::summarize(
+    count = dplyr::n(),
+    point_type = "start",
+    .groups = "drop"
+  ) |>
+  dplyr::bind_rows(
+    player_primes_pct_with_info |>
+      dplyr::group_by(league, age = end_age) |>
+      dplyr::summarize(
+        count = dplyr::n(),
+        point_type = "end",
+        .groups = "drop"
+      )
+  )
+age_league_counts <- order_leagues(age_league_counts)
+
+# Final PQI filtering and ordering
+pqi <- pqi |> dplyr::filter(!is.na(league))
+pqi <- order_leagues(pqi)
+
+# Calculate league-tiered players
+league_tiered_players <- pqi |>
+  dplyr::group_by(league) |>
+  dplyr::mutate(
+    # Calculate percentile rank within each league
+    percentile_rank = dplyr::percent_rank(pqi_selected),
+    # Assign tier based on percentile thresholds
+    prime_tier = dplyr::case_when(
+      percentile_rank >= 0.95 ~ "Hall of Fame",  # Top 5%
+      percentile_rank >= 0.75 ~ "Elite Player",  # Next 20% (75th-95th percentile)
+      percentile_rank >= 0.45 ~ "Great Starter", # Next 30% (45th-75th percentile)
+      percentile_rank >= 0.15 ~ "Starter",       # Next 30% (15th-45th percentile)
+      TRUE ~ "Backup"                            # Bottom 15%
+    )
+  ) |>
+  dplyr::ungroup()
+
+# Convert tier to factor with levels in the correct order
+league_tiered_players$prime_tier <- factor(
+  league_tiered_players$prime_tier,
+  levels = c("Hall of Fame", "Elite Player", "Great Starter", "Starter", "Backup")
+)
+pqi <- pqi |> 
+  dplyr::left_join(league_tiered_players |> dplyr::select(id, prime_tier)) |>
+  dplyr::rename(selected_tier = prime_tier)
+
+pqi <- order_tiers(pqi)
+
+gropd_df <- pqi |>
+  dplyr::group_by(id)
+play_traj <- player_trajectories
+```
+\newpage
+# Ridge Plot of Career Prime Start and End Ages
+
+```{r ridge-plot, fig.height=10, fig.width=12, echo=FALSE}
+caption_text <- "This visualization uses density ridge plots to display the distribution of career prime start ages (lighter density) and end ages (darker density) for athletes across different sports leagues. The x-axis represents age, while each row represents a different sports league. This visualization reveals sport-specific patterns in career development, with some leagues showing earlier prime starts and others showing more extended prime periods. The leagues with wider curves suggest less standardized career trajectories."
+
+ggplot(player_primes_pct_with_info, aes(y = league)) +
+  geom_density_ridges(aes(x = start_age, fill = league), alpha = 0.4) +
+  geom_density_ridges(aes(x = end_age, fill = league), alpha = 0.4) +
+  scale_fill_manual(values = league_color_mapping) +
+  labs(title = "Distribution of Career Prime Start and End Ages by League",
+       subtitle = "Lighter density shows prime start ages, darker density shows prime end ages",
+       x = "Age", y = "League",
+       caption = str_wrap(caption_text, width = 100)) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 14),
+    plot.title = element_text(size = 18, face = "bold"),
+    plot.subtitle = element_text(size = 14),
+    plot.caption = element_text(size = 15, hjust = 0),
+    legend.position = "none"
+  )
+```
+
+\newpage
+
+# Career Prime Duration by League
+
+```{r boxplot, fig.height=10, fig.width=12, echo=FALSE}
+caption_text <- "This box plot compares the duration of athletes' career primes across different sports leagues. Each box represents the distribution of prime durations for a given league. Some leagues show tighter distributions, indicating more predictable prime durations, while others display greater variability. This information can help to understand career longevity differences between leagues."
+
+ggplot(player_primes_pct_with_info, aes(x = league, y = prime_duration, fill = league)) +
+  geom_boxplot() +
+  scale_fill_manual(values = league_color_mapping) +
+  labs(title = "Career Prime Duration by League",
+       subtitle = "Box shows interquartile range, line shows median duration",
+       x = "League", y = "Years",
+       caption = str_wrap(caption_text, width = 100)) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 14),
+    plot.title = element_text(size = 18, face = "bold"),
+    plot.subtitle = element_text(size = 14),
+    plot.caption = element_text(size = 15, hjust = 0),
+    legend.position = "none",
+    axis.text.x = element_text(angle = 0, hjust = 0.5)
+  )
+```
+
+\newpage
+
+
+# Distribution of Prime Ages by League
+
+```{r ridge-density, fig.height=10, fig.width=12, echo=FALSE}
+caption_text <- "This density ridge plot shows the distribution of ages during which athletes are in their prime. The shaded areas represent the frequency of players in their prime at each age. Green dots mark average prime start ages, and the red dots mark average prime end ages. This visualization provides both the average prime window and the full distribution of prime ages, revealing not just when athletes typically peak, but also the shape and concentration of the age distribution during prime years. The plot is limited to ages 18-40 to focus on the most relevant career range."
+
+ggplot() +
+  # Base: Ridge density showing distribution of ages
+  geom_density_ridges(data = all_prime_ages,
+                      aes(x = ages, y = league, fill = league),
+                      alpha = 0.6, scale = 0.9) +
+  # Layer 1: Average markers
+  geom_point(data = league_primes, 
+             aes(x = avg_start_age, y = league), 
+             color = "darkgreen", size = 3) +
+  geom_point(data = league_primes, 
+             aes(x = avg_end_age, y = league), 
+             color = "darkred", size = 3) +
+  # Layer 2: Average prime segment
+  geom_segment(data = league_primes,
+               aes(x = avg_start_age, xend = avg_end_age, y = league, yend = league),
+               color = "black", linewidth = 1.5) +
+  scale_fill_manual(values = league_color_mapping) +
+  # Labels
+  labs(title = "Distribution of Prime Ages by League",
+       subtitle = "Density shows number of players in prime at each age\nGreen dots: avg prime start | Red dots: avg prime end | Black line: avg prime range",
+       x = "Age", y = "",
+       caption = str_wrap(caption_text, width = 100)) +
+  xlim(18, 40) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 14),
+    plot.title = element_text(size = 18, face = "bold"),
+    plot.subtitle = element_text(size = 14),
+    plot.caption = element_text(size = 15, hjust = 0),
+    legend.position = "none"
+  )
+```
+
+\newpage
+
+# Faceted Distribution of Career Prime Ages by League
+
+```{r faceted-distribution, fig.height=12, fig.width=12, echo=FALSE}
+caption_text <- "This visualization breaks down athlete career primes by league. The shaded area shows the number of players in their prime at each age, give an idea of when most athletes are performing at their peak. Vertical dashed lines mark the average start (green) and end (red) ages for each league."
+
+ggplot() +
+  # Base: Background area showing age distribution
+geom_area(data = all_prime_ages, 
+          aes(x = ages, y = count, group = league, fill = league), 
+          alpha = 0.4) +
+scale_fill_manual(values = league_color_mapping) +
+  geom_vline(data = league_primes,
+             aes(xintercept = avg_start_age),
+             color = "darkgreen", linetype = "dashed") +
+  geom_vline(data = league_primes,
+             aes(xintercept = avg_end_age),
+             color = "darkred", linetype = "dashed") +
+  # Facet by league
+  facet_wrap(~league, scales = "free_y") +
+  # Labels
+  labs(title = "Distribution of Career Prime Ages by League",
+       subtitle = "Shaded area: players in prime at each age\nDashed lines: average start/end ages",
+       x = "Age", y = "Number of Players",
+       caption = str_wrap(caption_text, width = 100)) +
+  xlim(18,40) + 
+  theme_minimal() +
+  theme(
+    text = element_text(size = 14),
+    plot.title = element_text(size = 18, face = "bold"),
+    plot.subtitle = element_text(size = 14),
+    plot.caption = element_text(size = 15, hjust = 0),
+    strip.text = element_text(size = 14, face = "bold"),
+    legend.position = "none"
+  )
+```
+
+\newpage
+
+# Players in Career Prime by Age and League
+
+```{r age-specific-counts, fig.height=12, fig.width=12, echo=FALSE}
+caption_text <- "This bar chart visualization provides a precise count of how many athletes are in their career prime at each age, shown separately for each league. Vertical dashed lines mark the average prime start age, while dotted lines indicate the average prime end age for each league."
+
+ggplot(prime_age_counts, aes(x = prime_ages, y = n, fill = league)) +
+  geom_col() +
+  # Add average start/end lines
+  geom_vline(data = league_primes,
+             aes(xintercept = avg_start_age, color = league),
+             linetype = "dashed") +
+  geom_vline(data = league_primes,
+             aes(xintercept = avg_end_age, color = league),
+             linetype = "dotted") +
+  scale_fill_manual(values = league_color_mapping) +
+  # Labels
+  facet_wrap(~league, scales = "free_y") +
+  labs(title = "Players in Career Prime by Age and League",
+       subtitle = "Height shows number of players in prime at each age\nDashed line: avg prime start | Dotted line: avg prime end",
+       x = "Age", y = "Number of Players",
+       caption = str_wrap(caption_text, width = 100)) +
+  theme_minimal() +
+  xlim(18,40) +
+  theme(
+    legend.position = "none",
+    text = element_text(size = 14),
+    plot.title = element_text(size = 18, face = "bold"),
+    plot.subtitle = element_text(size = 14),
+    plot.caption = element_text(size = 15, hjust = 0),
+    strip.text = element_text(size = 14, face = "bold")
+  )
+```
+
+\newpage
+```{r tier-leag-dist, fig.height=12, fig.width=12, echo=FALSE}
+caption_text <- "This visualization shows the distribution of player tiers across different sports leagues. Each bar represents a league, with colored segments showing the proportion of players in each tier from Backup to Hall of Fame."
+
+pqi |>
+  dplyr::group_by(league, selected_tier) |>
+  dplyr::summarize(count = dplyr::n(), .groups = "drop") |>
+  dplyr::group_by(league) |>
+  dplyr::mutate(percentage = count / sum(count) * 100) |>
+  dplyr::ungroup() |>
+  ggplot(aes(x = league, y = percentage, fill = selected_tier)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = tier_color_mapping) +
+  labs(title = "Distribution of Player Tiers by League",
+       subtitle = "Based on league-normalized PQI (NFL uses position-normalized)",
+       x = "League", y = "Percentage", fill = "Player Tier",
+       caption = str_wrap(caption_text, width = 100)) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 14),
+    plot.title = element_text(size = 18, face = "bold"),
+    plot.subtitle = element_text(size = 14),
+    plot.caption = element_text(size = 15, hjust = 0),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+\newpage
+```{r prime-pqi-scatter, fig.height=12, fig.width=12, echo=FALSE}
+caption_text <- "This scatter plot explores the relationship between an athlete's prime duration (number of seasons in their prime) and their PQI score. Each point represents a player, with colors indicating their league. The black trend line shows the overall correlation across all sports. Longer prime durations generally correlate with higher PQI scores, though this relationship varies by sport. Some athletes achieve high PQI scores with shorter primes through exceptional peak performance, while others accumulate value through consistency over longer primes."
+pqi <- pqi |> dplyr::filter(league != "PWHL")
+ggplot(pqi, aes(x = prime_seasons, y = pqi_selected, color = league)) +
+  geom_jitter(alpha = 0.5, width = 0.2) +
+  geom_smooth(method = "loess", se = TRUE, color = "black") +
+  facet_wrap(~league) +
+  scale_color_manual(values = league_color_mapping) +
+  labs(title = "Relationship Between Prime Duration and PQI",
+       subtitle = "Longer prime durations tend to correlate with higher PQI scores",
+       x = "Prime Seasons", y = "Selected PQI", color = "League",
+       caption = str_wrap(caption_text, width = 100)) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 14),
+    plot.title = element_text(size = 18, face = "bold"),
+    plot.subtitle = element_text(size = 14),
+    plot.caption = element_text(size = 15, hjust = 0)
+  )
+```
+
+\newpage
+```{r pqi-act-ret, fig.height=12, fig.width=12, echo=FALSE}
+caption_text <- "This visualization compares PQI distributions between active and retired players across different leagues. Differences between active and retired players can reveal shifts in talent quality, changes in performance measurement, or recency bias in player evaluation. In some leagues, active players show higher PQI scores, possibly due to improved training methods, rule changes benefiting certain playing styles, or incomplete career trajectories."
+
+pqi |>
+  ggplot(aes(x = is_active, y = pqi_selected, fill = is_active)) +
+  geom_boxplot() +
+  facet_wrap(~league) +
+  scale_fill_manual(values = c("FALSE" = "#E41A1C", "TRUE" = "#4DAF4A"),
+                   labels = c("FALSE" = "Retired", "TRUE" = "Active")) +
+  labs(title = "PQI Comparison: Active vs. Retired Players",
+       subtitle = "Examining differences in player quality distribution between active and retired athletes",
+       x = "", y = "Selected PQI", fill = "Status",
+       caption = str_wrap(caption_text, width = 100)) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 14),
+    plot.title = element_text(size = 18, face = "bold"),
+    plot.subtitle = element_text(size = 14),
+    plot.caption = element_text(size = 15, hjust = 0),
+    strip.text = element_text(size = 14, face = "bold"),
+    axis.text.x = element_blank()
+  )
+```
+\newpage
+```{r career-milestones, fig.height=12, fig.width=12, echo=FALSE}
+# Create a dataset with career milestones
+career_milestones <- sports |>
+  dplyr::filter(!is.na(league)) |> 
+  dplyr::group_by(id) |>
+  dplyr::summarize(
+    debut_age = min(age),
+    last_age = max(age),
+    career_length = last_age - debut_age + 1,
+    league = dplyr::first(league)
+  ) |>
+  dplyr::inner_join(player_primes_pct |> select(-league), by = "id") |>
+  dplyr::select(id, league, debut_age, start_age, end_age, last_age, career_length) |>
+  dplyr::distinct()
+
+# Calculate averages by league
+league_milestones <- career_milestones |>
+  dplyr::group_by(league) |>
+  dplyr::summarize(
+    avg_debut_age = mean(debut_age, na.rm = TRUE),
+    avg_start_prime = mean(start_age, na.rm = TRUE),
+    avg_end_prime = mean(end_age, na.rm = TRUE),
+    avg_last_age = mean(last_age, na.rm = TRUE)
+  ) |>
+  dplyr::arrange(avg_start_prime)
+
+# Convert to long format for plotting
+milestones_long <- league_milestones |>
+  tidyr::pivot_longer(
+    cols = dplyr::starts_with("avg_"),
+    names_to = "milestone",
+    values_to = "age"
+  ) |>
+  dplyr::mutate(
+    milestone = factor(milestone, 
+                     levels = c("avg_debut_age", "avg_start_prime", "avg_end_prime", "avg_last_age"),
+                     labels = c("Debut", "Prime Start", "Prime End", "Career End"))
+  )
+
+# Order leagues
+milestones_long$league <- factor(milestones_long$league, levels = league_order)
+
+# Create the visualization
+caption_text <- "This timeline visualization shows the average age progression through major career milestones for athletes across different leagues. Each row represents a league, with colored points marking the average age at debut, start of prime, end of prime, and career end. This visualization provides insight into the typical career trajectory and timing across different leagues"
+
+ggplot(milestones_long, aes(x = age, y = league, color = milestone, group = league)) +
+  geom_line(size = 1.5, color = "gray80") +
+  geom_point(size = 4) +
+  scale_color_manual(values = c("Debut" = "#3498db", "Prime Start" = "#2ecc71", 
+                               "Prime End" = "#e74c3c", "Career End" = "#95a5a6")) +
+  labs(title = "Career Progression Timeline by League",
+       subtitle = "Average age at key career milestones",
+       x = "Age", y = "",
+       color = "Milestone",
+       caption = str_wrap(caption_text, width = 100)) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 14),
+    plot.title = element_text(size = 18, face = "bold"),
+    plot.subtitle = element_text(size = 14),
+    plot.caption = element_text(size = 15, hjust = 0)
+  )
+```
+\newpage
+
+```{r top-traj, fig.height=20, fig.width=12, echo=FALSE}
+# Top trajectories visualization
+top_players <- c("NBA-jeremy-lin-00", "NBA-lebron-james-00", "NBA-derrick-rose-00", "NFL-stephen-curry-00", "NFL-tom-brady-00", 
+                 "NBA-kevin-durant-00", "NFL-drew-brees-00",
+                  "NFL-larry-fitzgerald-00", "MLB-mike-trout-00", "NHL-sidney-crosby-00",
+                "NHL-erik-karlsson-00", "NHL-nathan-mackinnon-00")
+
+# Get performance data with actual values from sports
+actual_data <- sports |>
+  dplyr::filter(id %in% top_players) |>
+  dplyr::select(id, age, season, player_name, player_value, league) |>
+  dplyr::group_by(id) |>
+  dplyr::mutate(
+    normalized_actual = player_value / max(player_value, na.rm = TRUE) * 100,
+    league = dplyr::first(league),
+    player_name = dplyr::first(player_name)
+  ) |>
+  dplyr::ungroup()
+
+# Get predicted values from player_traj
+predicted_data <- play_traj |>
+  dplyr::filter(id %in% top_players) |>
+  dplyr::select(id, age, predicted_value) |>
+  dplyr::group_by(id) |>
+  dplyr::mutate(
+    normalized_predicted = predicted_value / max(predicted_value, na.rm = TRUE) * 100
+  ) |>
+  dplyr::ungroup()
+
+# Join the datasets
+top_player_data <- actual_data |>
+  dplyr::left_join(predicted_data, by = c("id", "age"))
+
+# Convert to long format to separate actual vs predicted curves
+top_player_long <- top_player_data |>
+  tidyr::pivot_longer(
+    cols = c(normalized_actual, normalized_predicted),
+    names_to = "value_type",
+    values_to = "normalized_value"
+  ) |>
+  dplyr::mutate(
+    value_type = factor(value_type, 
+                       levels = c("normalized_actual", "normalized_predicted"),
+                       labels = c("Actual Performance", "Predicted Performance"))
+  )
+
+# Get actual prime periods for actual performance
+actual_prime_data <- player_prime_actual |>
+  dplyr::filter(id %in% top_players) |>
+  dplyr::select(id, start_age, end_age) |>
+  dplyr::mutate(value_type = "Actual Performance")
+
+# Get predicted prime periods for predicted performance
+predicted_prime_data <- player_primes_pct |>
+  dplyr::filter(id %in% top_players) |>
+  dplyr::select(id, start_age, end_age) |>
+  dplyr::mutate(value_type = "Predicted Performance")
+
+# Combine the two prime datasets
+combined_prime_data <- dplyr::bind_rows(actual_prime_data, predicted_prime_data)
+
+# Join prime data with player data
+top_player_primes <- top_player_long |>
+  dplyr::inner_join(combined_prime_data, by = c("id", "value_type")) |>
+  dplyr::mutate(in_prime = age >= start_age & age <= end_age)
+
+# Calculate prime areas for geom_rect
+prime_areas <- top_player_primes |> 
+  dplyr::filter(in_prime) |> 
+  dplyr::group_by(id, player_name, value_type) |>
+  dplyr::summarize(
+    start_age = dplyr::first(start_age),
+    end_age = dplyr::first(end_age),
+    league = dplyr::first(league),
+    .groups = "drop"
+  )
+
+# Order leagues
+top_player_primes$league <- factor(top_player_primes$league, levels = league_order)
+
+# Create the visualization
+caption_text <- "This visualization compares actual and predicted performance trajectories for selected players. Each graph shows a player's performance over their career, normalized to their peak (100%). The left column shows actual performance with actual prime periods, while the right column shows predicted performance with predicted prime periods. The highlighted sections indicate each athlete's prime period. The comparison allows us to see how well predicted values align with actual performance and whether predicted prime periods match actual prime periods."
+
+ggplot(top_player_primes, aes(x = age, y = normalized_value, color = league, group = interaction(id, value_type))) +
+  # Use geom_rect to highlight prime periods
+  geom_rect(
+    data = prime_areas,
+    aes(xmin = start_age, xmax = end_age, ymin = 0, ymax = 105, fill = league),
+    alpha = 0.2,
+    inherit.aes = FALSE
+  ) +
+  # Add vertical lines at the start and end of prime periods
+  geom_vline(
+    data = prime_areas,
+    aes(xintercept = start_age, color = league),
+    linetype = "dashed",
+    alpha = 0.7
+  ) +
+  geom_vline(
+    data = prime_areas,
+    aes(xintercept = end_age, color = league),
+    linetype = "dashed",
+    alpha = 0.7
+  ) +
+  # Add performance line
+  geom_line(size = 1.2) +
+  geom_point(size = 1) +
+  # Add player labels (only once per player)
+  geom_text_repel(
+    data = top_player_primes |> 
+      dplyr::filter(value_type == "Actual Performance") |>
+      dplyr::group_by(id) |> 
+      dplyr::slice_max(order_by = age, n = 1),
+    aes(label = player_name), 
+    nudge_x = 1, direction = "y", hjust = 0, size = 4
+  ) +
+  # Add prime period annotation
+  geom_text(
+    data = prime_areas |> 
+      dplyr::mutate(
+        prime_label = paste0("Prime: ", start_age, "-", end_age),
+        label_x = (start_age + end_age) / 2,
+        label_y = 10
+      ),
+    aes(x = label_x, y = label_y, label = prime_label, color = league),
+    inherit.aes = FALSE,
+    size = 3.5
+  ) +
+  # Format the plot
+  scale_color_manual(values = league_color_mapping) +
+  scale_fill_manual(values = league_color_mapping) +
+  labs(title = "Actual vs. Predicted Career Trajectories of Elite Players",
+       subtitle = "Normalized performance curves with actual and predicted prime periods",
+       x = "Age", y = "Performance (% of Peak)",
+       color = "League", fill = "League",
+       caption = str_wrap(caption_text, width = 100)) +
+  scale_y_continuous(limits = c(0, 105)) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 14),
+    plot.title = element_text(size = 18, face = "bold"),
+    plot.subtitle = element_text(size = 14),
+    plot.caption = element_text(size = 15, hjust = 0),
+    legend.position = "right"
+  ) +
+  # Create facets for each player and value type
+  facet_grid(player_name ~ value_type, scales = "free_x")
+```
+\newpage
+```{r sport-phyiscality,  fig.height=12, fig.width=12, echo=FALSE}
+physicality_mapping <- c(
+  "CHESS_M" = "Mental",
+  "CHESS_F" = "Mental",
+  "MLS" = "Moderate Physical",
+  "NWSL" ="Moderate Physical",
+  "NHL" = "High Physical",
+  "PWHL" = "High Physical",
+  "NBA" = "Moderate Physical",
+  "WNBA" ="Moderate Physical",
+  "MLB" = "Moderate Physical",
+  "NFL" = "High Physical"
+)
+
+# Add physicality category to prime data
+physical_primes <- player_primes_pct_with_info |>
+  dplyr::mutate(physicality = physicality_mapping[league])
+
+# Order leagues and physicality categories
+physical_primes$league <- factor(physical_primes$league, levels = league_order)
+physical_primes$physicality <- factor(physical_primes$physicality, 
+                                      levels = c("Mental", "Moderate Physical", "High Physical"))
+
+# Calculate averages by physicality group
+physicality_stats <- physical_primes |>
+  dplyr::group_by(physicality) |>
+  dplyr::summarize(
+    avg_start = mean(start_age, na.rm = TRUE),
+    avg_end = mean(end_age, na.rm = TRUE),
+    avg_duration = mean(prime_duration, na.rm = TRUE),
+    median_start = median(start_age, na.rm = TRUE),
+    median_end = median(end_age, na.rm = TRUE),
+    count = dplyr::n()
+  )
+
+# Create the boxplot visualization
+caption_text <- "This visualization compares prime age patterns between sports grouped by their physical demands. Sports are categorized into mental (chess), moderate physical (baseball,soccer,basketball), and high physical (football, hockey). The boxplots show the distribution of prime start ages, end ages, and durations across these categories. This helps reveal how the physical nature of a sport influences career development patterns."
+
+p1 <- ggplot(physical_primes, aes(x = physicality, y = start_age, fill = physicality)) +
+  geom_boxplot() +
+  labs(title = "Prime Start Age",
+       x = "", y = "Age") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+p2 <- ggplot(physical_primes, aes(x = physicality, y = end_age, fill = physicality)) +
+  geom_boxplot() +
+  labs(title = "Prime End Age",
+       x = "", y = "Age") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+p3 <- ggplot(physical_primes, aes(x = physicality, y = prime_duration, fill = physicality)) +
+  geom_boxplot() +
+  labs(title = "Prime Duration",
+       x = "", y = "Years") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+combined_plot <- p1 + p2 + p3 + 
+  plot_layout(ncol = 3) +
+  plot_annotation(
+    title = "Prime Age Patterns by Sport Physicality Level",
+    subtitle = "Comparing career development across mental, moderate, and high-physical sports",
+    caption = str_wrap(caption_text, width = 100),
+    theme = theme(
+      text = element_text(size = 14),
+      plot.title = element_text(size = 18, face = "bold"),
+      plot.subtitle = element_text(size = 14),
+      plot.caption = element_text(size = 15, hjust = 0)
+    )
+  )
+
+combined_plot
+```
+\newpage
+```{r sport-elite,  fig.height=12, fig.width=12, echo=FALSE}
+elite_comparison <- pqi |>
+  dplyr::mutate(
+    elite_status = dplyr::case_when(
+      selected_tier %in% c("Hall of Fame", "Elite Player") ~ "Elite",
+      TRUE ~ "Non-Elite"
+    )
+  ) |>
+  dplyr::inner_join(player_primes_pct |> select(-league), by = "id") |>
+  dplyr::select(id, league, elite_status, start_age, end_age, prime_duration)
+
+# Order leagues and elite status
+elite_comparison$league <- factor(elite_comparison$league, levels = league_order)
+elite_comparison$elite_status <- factor(elite_comparison$elite_status, levels = c("Elite", "Non-Elite"))
+
+# Calculate statistics
+elite_stats <- elite_comparison |>
+  dplyr::group_by(league, elite_status) |>
+  dplyr::summarize(
+    avg_start = mean(start_age, na.rm = TRUE),
+    avg_end = mean(end_age, na.rm = TRUE),
+    avg_duration = mean(prime_duration, na.rm = TRUE),
+    count = dplyr::n()
+  ) |>
+  dplyr::filter(count >= 5) # Ensure sufficient data points
+
+# Create visualization 
+caption_text <- "This visualization compares the prime age patterns between elite players (Hall of Fame and Elite tier) and non-elite players across different leagues. Each facet compares the start age, end age, and duration of primes. This can identify whether exceptional talent emerges earlier, sustains longer, or follows unique patterns compared to typical athletes in each sport."
+
+ggplot(elite_comparison, aes(x = elite_status, y = prime_duration, fill = elite_status)) +
+  geom_boxplot(alpha = 0.7) +
+  facet_wrap(~league, scales = "free_y") +
+  labs(title = "Prime Duration: Elite vs. Non-Elite Players",
+       subtitle = "Comparing career prime patterns between top performers and others",
+       x = "", y = "Prime Duration (Years)",
+       fill = "Player Tier",
+       caption = str_wrap(caption_text, width = 100)) +
+  scale_fill_manual(values = c("Elite" = "#6d1945", "Non-Elite" = "#a8bede")) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 14),
+    plot.title = element_text(size = 18, face = "bold"),
+    plot.subtitle = element_text(size = 14),
+    plot.caption = element_text(size = 15, hjust = 0),
+    strip.text = element_text(size = 14, face = "bold")
+  )
+```
+\newpage

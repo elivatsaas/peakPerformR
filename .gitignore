@@ -1,0 +1,13 @@
+# R-specific
+.Rproj.user
+.Rhistory
+
+
+# Package specific
+*.Rcheck/
+*.tar.gz
+*.zip
+
+# System files
+.DS_Store
+Thumbs.db
