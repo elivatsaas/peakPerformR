@@ -6,15 +6,17 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     libxml2-dev
 
-# Install R packages
+# Install R packages (including your package)
 RUN R -e "install.packages(c('plumber', 'jsonlite', 'dplyr', 'tidyr', 'readr', 'purrr', 'remotes'))"
+# Install your package if needed
+# RUN R -e "remotes::install_github('yourusername/your-package')"
 RUN R -e "remotes::install_github('elivatsaas/peakPerformR')"
 
-# Create app directory
+# Copy only the plumber directory contents
 WORKDIR /app
 COPY . /app
 
-# Expose port (Render will set this automatically, but good to have)
+# Expose port
 EXPOSE 8000
 
 # Start the API
