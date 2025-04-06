@@ -4,7 +4,7 @@ username: elivatsaas
 account: elivatsaas
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
-appId: 14441794
-bundleId: 10064040
+appId: 14441985
+bundleId: 10064166
 url: https://elivatsaas.shinyapps.io/peakperformr-api/
 version: 1
