@@ -1,3 +1,5 @@
+^renv$
+^renv\.lock$
 ^peakPerformR\.Rproj$
 ^\.Rproj\.user$
 ^docs$

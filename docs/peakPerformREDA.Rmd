@@ -172,7 +172,8 @@ league_primes <- player_primes_pct_with_info |>
     start_age_25th = quantile(start_age, 0.25),
     start_age_75th = quantile(start_age, 0.75),
     end_age_25th = quantile(end_age, 0.25),
-    end_age_75th = quantile(end_age, 0.75)
+    end_age_75th = quantile(end_age, 0.75),
+    n = n()
   )
 league_primes <- order_leagues(league_primes)
 

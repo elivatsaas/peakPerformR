@@ -8,6 +8,8 @@
 #'        Must include 'id', 'player_name', 'sport', 'league', 'position', 'season',
 #'        'age', 'games_played', 'in_prime', 'scaled_value', 'tier_score',
 #'        and 'performance_tier' columns.
+#' @param season_data Original season-level data for calculating standard deviations.
+#'        Must include 'id', 'season', 'age', 'scaled_value', and 'in_prime' columns.
 #'
 #' @return A data frame with one row per player containing prime-related metrics:
 #'   \item{id}{Player identifier}
@@ -50,7 +52,7 @@
 #' }
 #'
 #' @export
-process_player_primes <- function(final_dataset) {
+process_player_primes <- function(final_dataset, season_data) {
   # First, ensure we're working with one row per player by properly grouping
 
   # Determine the latest season for each league
@@ -62,10 +64,11 @@ process_player_primes <- function(final_dataset) {
     # Add latest season info for each league
     dplyr::left_join(latest_seasons, by = "league") %>%
     # Group by player identifiers to ensure uniqueness
-    dplyr::group_by(id, player_name, sport, league, position, max_season) %>%
+    dplyr::group_by(id, player_name, sport, league, max_season) %>%
     dplyr::summarise(
+      position = last(position),
       # Career information
-      career_seasons = dplyr::n_distinct(season),
+      career_seasons = dplyr::n_distinct(age),
       career_games = sum(games_played, na.rm = TRUE),
 
       # Prime information
@@ -91,8 +94,12 @@ process_player_primes <- function(final_dataset) {
       else 0,
 
       # Career tier distribution (not just prime)
+      career_avg_tier = mean(tier_score, na.rm = TRUE),
+
       career_elite_pct = sum(performance_tier == "Elite", na.rm = TRUE) / dplyr::n() * 100,
       career_great_pct = sum(performance_tier == "Great", na.rm = TRUE) / dplyr::n() * 100,
+      career_avg_value = mean(scaled_value, na.rm = TRUE),
+      career_peak_value = max(scaled_value, na.rm = TRUE),
 
       # Prime density (what percentage of career was prime)
       prime_density = prime_seasons / career_seasons * 100,
@@ -109,5 +116,45 @@ process_player_primes <- function(final_dataset) {
     # Handle NaN values
     dplyr::mutate(dplyr::across(where(is.numeric), ~ifelse(is.nan(.), NA, .)))
 
-  return(player_summaries)
+  season_data <- season_data |>
+    left_join(final_dataset %>% select(id,age,scaled_value, in_prime), by = c("id", "age"))
+
+    # Calculate standard deviation for prime and career performance
+    consistency_metrics <- season_data |>
+      dplyr::group_by(id) |>
+      dplyr::summarise(
+        # Standard deviation during prime seasons
+        prime_sd = stats::sd(scaled_value[in_prime], na.rm = TRUE),
+        # Standard deviation across entire career
+        career_sd = stats::sd(scaled_value, na.rm = TRUE),
+        # Count of seasons for validation
+        prime_count = sum(in_prime, na.rm = TRUE),
+        career_count = dplyr::n(),
+        .groups = "drop"
+      ) |>
+      # Handle cases with insufficient data for SD calculation
+      dplyr::mutate(
+        prime_sd = ifelse(prime_count < 2 | is.na(prime_sd), 0, prime_sd),
+        career_sd = ifelse(career_count < 2 | is.na(career_sd), 0, career_sd)
+      )
+
+    # Join the consistency metrics with the player summaries
+    player_summaries_with_consistency <- player_summaries |>
+      dplyr::left_join(consistency_metrics, by = "id") |>
+      dplyr::mutate(
+        # Calculate consistency factors
+        # Bound the standard deviation ratio to avoid extreme values
+        prime_sd_ratio = pmin(prime_sd / pmax(prime_avg_value, 0.001), 1),
+        career_sd_ratio = pmin(career_sd / pmax(career_avg_value, 0.001), 1),
+
+        # Calculate consistency factors (higher values = more consistent)
+        prime_consistency = pmax(1 - (prime_sd_ratio * 0.5), 0.5),
+        career_consistency = pmax(1 - (career_sd_ratio * 0.5), 0.5)
+      ) |>
+      # Remove intermediate calculation columns
+      dplyr::select(-prime_sd_ratio, -career_sd_ratio)
+    player_summaries_with_consistency <-player_summaries_with_consistency %>%
+      distinct(id, .keep_all = TRUE)
+    return(player_summaries_with_consistency)
+
 }

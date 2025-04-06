@@ -105,5 +105,11 @@ utils::globalVariables(c(
   "predicted_value", "prime_avg_tier", "prime_avg_value",
   "prime_duration", "prime_peak_value", "prime_seasons",
   "prime_tier", "scaled_value", "start_age", "threshold_value",
-  "upper_bound"
+  "upper_bound",  "cluster","tier_rank",  "position_group",
+  "career_avg_tier", "career_avg_value_safe",
+  "career_peak_value_safe","career_seasons_safe","cqi_raw",
+  "cqi_score","games_threshold_calc","num_seasons",
+  "min_rows_needed","skip_before_used",
+  "skip_after_used",    ".scaling_group_pos",
+  ".final_group"
 ))

@@ -16,33 +16,35 @@ Depends:
 LazyData: true
 LazyDataCompression: xz
 Imports:
-    dplyr,
+    dplyr (>= 1.1.0),
     purrr,
-    tidyr,
-    cluster,
+    tidyr, 
     ggplot2,
-    grDevices,
+    grDevices, 
     stringr,
     lubridate,
     httr,
     jsonlite,
-    stats,
+    stats,    
     baseballr,
     fastRhockey,
-    hoopR, 
+    hoopR,
     itscalledsoccer,
     magrittr,
     nflreadr,
-    wehoop
+    wehoop,
+    rlang,
+    tibble,
+    utils     
 Suggests:
+    cluster,  
     countrycode,
     furrr,
-    graphics,
+    graphics,  
     pacman,
     progress,
     readr,
     rvest,
-    utils,
     WikidataR,
     testthat (>= 3.0.0)
 Config/testthat/edition: 3

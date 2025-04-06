@@ -2,64 +2,98 @@
 % Please edit documentation in R/identify_prime.R
 \name{identify_prime}
 \alias{identify_prime}
-\title{Identify Player Prime Years}
+\title{Identify Player Prime Years (Robust Vectorized Version v11)}
 \usage{
 identify_prime(
   data,
   method = c("predicted", "actual"),
   threshold_pct = 70,
   games_pct_threshold = 40,
-  min_seasons = 5
+  min_seasons = 5,
+  disable_skip_leagues = c("CHESS_M", "CHESS_F")
 )
 }
 \arguments{
 \item{data}{A data frame containing player performance data.
-For method="predicted": Must include columns 'id', 'age', 'predicted_value', 'games_played', 'league'
-For method="actual": Must include columns 'id', 'age', 'player_value', 'games_played', 'league', 'season'}
+Requires columns: \code{id}, \code{age}, \code{games_played}, \code{league}.
+If \code{method = "predicted"}: Requires \code{predicted_value}.
+If \code{method = "actual"}: Requires \code{player_value}, \code{season}.
+Handles potential duplicate input column names (e.g., 'value').}
 
-\item{method}{Character string. The method to use for identifying prime years.
-Options are "predicted" (using player trajectory predictions) or
-"actual" (using actual season data). Default is "predicted".}
+\item{method}{Character string. Method for identifying prime: \code{"predicted"} or
+\code{"actual"}. Default: \code{"predicted"}.}
 
-\item{threshold_pct}{Numeric. The percentage of peak performance to consider as prime years.
-Default is 70.}
+\item{threshold_pct}{Numeric. Percentage of peak performance range (\code{max - min})
+used as the lower bound for prime years. Default: 70.}
 
-\item{games_pct_threshold}{Numeric. The percentile threshold for games played to consider
-in prime calculations. Default is 40.}
+\item{games_pct_threshold}{Numeric. Percentile threshold for \code{games_played} within
+a league. Seasons below this might trigger the skip
+mechanism if performance dips (unless league is disabled).
+Default: 40.}
 
-\item{min_seasons}{Integer. For method="actual", the minimum number of seasons required
-to calculate a prime. Default is 5.}
+\item{min_seasons}{Integer. For \code{method = "actual"}, the minimum number of
+distinct seasons with non-NA \code{player_value} required for
+a player to be included. Default: 5.}
+
+\item{disable_skip_leagues}{Character vector. League names (case-sensitive,
+must match \code{league} column exactly) for which the
+\code{games_played} skip logic should be disabled
+(by treating \code{games_played} as NA internally) AND
+for which the output \code{skip_..._used} flags will
+always be FALSE.
+Default: \code{c("CHESS_M", "CHESS_F")}. Set to \code{NULL}
+or \code{character(0)} to enable skip logic for all leagues.}
 }
 \value{
-A data frame containing prime years information for each player:
-\item{id}{Player identifier}
-\item{league}{Player's league}
-\item{max_value_age}{Age at peak performance}
-\item{start_age}{Age when prime years begin}
-\item{end_age}{Age when prime years end}
-\item{prime_duration}{Duration of prime in years}
-\item{threshold_value}{The performance threshold used}
-\item{threshold_pct}{The percentage threshold specified}
-\item{skip_before_used}{Whether a skip was used before peak due to low games played}
-\item{skip_after_used}{Whether a skip was used after peak due to low games played}
+A data frame (tibble) containing prime years information: \code{id}, \code{league},
+\code{max_value_age}, \code{start_age}, \code{end_age}, \code{prime_duration}, \code{threshold_value},
+\code{threshold_pct}, \code{skip_before_used} (always FALSE for disabled leagues),
+\code{skip_after_used} (always FALSE for disabled leagues). Returns an empty
+tibble with the correct structure if no players meet criteria or errors occur.
 }
 \description{
-Identifies the prime years in a player's career based on performance data.
-This function can work with either predicted trajectory data (from spline models)
-or actual player season data, determining prime years as a period where performance
-remains above a specified threshold of peak performance.
+Identifies the prime years in a player's career using vectorized \code{dplyr}
+operations. Determines prime as a period where performance is above a
+threshold relative to the player's peak (max-min range). Includes a mechanism
+to skip one season below the threshold if games played were low. This skip
+mechanism AND the corresponding output flags (\code{skip_before_used},
+\code{skip_after_used}) are fully disabled for specified leagues (e.g., chess).
+Handles NA values, edge cases, potential name conflicts during processing,
+and calculation errors robustly. Addresses issues with combining results after
+reframe by directly using reframe's output which includes the ID.
 }
 \examples{
 \dontrun{
-# With predicted trajectory data
-player_trajectories <- readr::read_csv("player_spline_predictions.csv")
-player_joins <- player_trajectories |>
-  dplyr::left_join(sports |> dplyr::select(id, league, position, age, games_played), by = c("id", "age"))
-player_prime_pct <- identify_prime(player_joins, method = "predicted", threshold_pct = 80)
+# --- Generate Sample Data ---
+set.seed(456)
+n_players_demo <- 70; n_seasons_pred_demo <- 15
+player_ids_pred_demo <- paste0("P", 1:n_players_demo)
+leagues_demo <- sample(c("NFL", "NBA", "CHESS_M", "CHESS_F"), n_players_demo, TRUE, c(0.35,0.35,0.15,0.15))
+player_trajectories_demo <- expand.grid(id=player_ids_pred_demo, age=20:(20+n_seasons_pred_demo-1)) |>
+  dplyr::mutate(
+    league = leagues_demo[match(id, player_ids_pred_demo)],
+    peak_age = sample(25:30, n_players_demo, TRUE)[match(id, player_ids_pred_demo)],
+    predicted_value = round(pmax(0, 100 - 0.5*(age-peak_age)^2 + rnorm(dplyr::n(), 0, 8)), 1),
+    player_value = predicted_value + rnorm(dplyr::n(), 0, 2),
+    season = 2000 + (age - 20),
+    games_played = sample(5:100, dplyr::n(), TRUE),
+    games_played = ifelse(runif(dplyr::n()) < 0.1, sample(1:4, dplyr::n(), TRUE), games_played),
+    games_played = ifelse(runif(dplyr::n()) < 0.05, NA, games_played),
+    predicted_value = ifelse(runif(dplyr::n()) < 0.02, NA, predicted_value),
+    player_value = ifelse(runif(dplyr::n()) < 0.02, NA, player_value)
+  )
 
-# With actual player data
-sports <- build_all_sports(nfl_value = fpts.game)
-player_prime_actual <- identify_prime(sports, method = "actual", threshold_pct = 80, min_seasons = 5)
+# --- Run the function (Predicted) ---
+player_prime_pred <- identify_prime(
+  player_trajectories_demo, method = "predicted", threshold_pct = 80,
+  games_pct_threshold = 40, disable_skip_leagues = c("CHESS_M", "CHESS_F")
+)
+print(head(player_prime_pred))
+summary(player_prime_pred)
+
+# --- Check Chess Flags ---
+chess_res <- dplyr::filter(player_prime_pred, league \%in\% c("CHESS_M", "CHESS_F"))
+print("Chess Skips:"); print(summary(chess_res[c("skip_before_used", "skip_after_used")]))
 }
 
 }

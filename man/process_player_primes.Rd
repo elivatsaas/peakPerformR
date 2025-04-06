@@ -4,13 +4,16 @@
 \alias{process_player_primes}
 \title{Process Player Prime Seasons for PQI Calculation}
 \usage{
-process_player_primes(final_dataset)
+process_player_primes(final_dataset, season_data)
 }
 \arguments{
 \item{final_dataset}{A data frame containing player performance data with prime flags.
 Must include 'id', 'player_name', 'sport', 'league', 'position', 'season',
 'age', 'games_played', 'in_prime', 'scaled_value', 'tier_score',
 and 'performance_tier' columns.}
+
+\item{season_data}{Original season-level data for calculating standard deviations.
+Must include 'id', 'season', 'age', 'scaled_value', and 'in_prime' columns.}
 }
 \value{
 A data frame with one row per player containing prime-related metrics:

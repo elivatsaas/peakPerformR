@@ -15,8 +15,7 @@ calculate_prime_quality_index(
 }
 \arguments{
 \item{player_data}{A data frame containing player performance data.
-Either pre-aggregated with 'prime_seasons', 'prime_avg_tier', etc.,
-or per-season data with 'in_prime' flag.}
+Must include columns with prime metrics.}
 
 \item{nfl_by_position}{Logical. Whether to use position-specific normalization for NFL players.
 Default is TRUE.}
@@ -36,32 +35,7 @@ Default is "pqi_scores.csv".}
 A data frame with calculated PQI scores and tiers for each player.
 }
 \description{
-Calculates the Prime Quality Index (PQI) for players based on their prime years performance.
-This function handles both pre-aggregated prime metrics and per-season data with an 'in_prime' flag.
-}
-\details{
-Prime tiers can be defined using two different methods:
-
-When tier_method = "percentile", tiers are defined by percentile ranks within each league:
-\itemize{
-\item Hall of Fame: Top 5 percentile (95th percentile and above)
-\item Elite Player: 75th to 95th percentile
-\item Great Starter: 45th to 75th percentile
-\item Starter: 15th to 45th percentile
-\item Backup: Bottom 15 percentile
-}
-
-When tier_method = "cluster", tiers are defined by CLARA clustering (k=5) of PQI scores
-within each league, with clusters ordered from highest to lowest performance and labeled
-accordingly. CLARA is a clustering method designed for large datasets.
-}
-\examples{
-\dontrun{
-# Calculate PQI scores with percentile-based tiers (default)
-pqi_percentile <- calculate_prime_quality_index(player_data)
-
-# Calculate PQI scores with cluster-based tiers
-pqi_cluster <- calculate_prime_quality_index(player_data, tier_method = "cluster")
-}
-
+Calculates the Prime Quality Index (PQI) for players based on their prime years performance
+with a simplified formula that doesn't include consistency factors. The PQI score is directly
+expressed as a percentile (0-100) within the appropriate comparison group.
 }
