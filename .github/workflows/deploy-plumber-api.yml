@@ -1,5 +1,9 @@
-name: Build and deploy to Azure Container Apps
-
+- name: Build and push
+        uses: docker/build-push-action@v4
+        with:
+          context: ./plumber
+          push: true
+          tags: ghcr.io/${{ toLowerCase(github.repository) }}/plumber-api:${{ github.sha }}
 on:
   push:
     branches: [master]
