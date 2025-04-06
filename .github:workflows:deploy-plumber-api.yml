@@ -1,0 +1,47 @@
+name: Deploy Plumber API
+
+on:
+  push:
+    paths:
+      - "plumber/**" # Only trigger when files in plumber directory change
+    branches: [main]
+  workflow_dispatch: # Allow manual triggers
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Log in to GitHub container registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push container image to registry
+        uses: docker/build-push-action@v4
+        with:
+          context: ./plumber # Point to the subfolder
+          push: true
+          tags: ghcr.io/${{ github.repository }}/plumber-api:${{ github.sha }}
+          file: ./plumber/Dockerfile
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy to Azure Container Apps
+        uses: azure/container-apps-deploy-action@v1
+        with:
+          appSourcePath: ${{ github.workspace }}/plumber
+          containerAppName: peakperformr-api
+          resourceGroup: YOUR_RESOURCE_GROUP_NAME # Replace with your resource group
+          containerAppEnvironment: peakperformr-env # Will be created if it doesn't exist
+          targetPort: 8080
+          ingress: external
+          registryUrl: ghcr.io
+          imageToDeploy: ghcr.io/${{ github.repository }}/plumber-api:${{ github.sha }}

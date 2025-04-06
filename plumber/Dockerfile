@@ -10,9 +10,11 @@ RUN apt-get update && apt-get install -y \
 RUN R -e "install.packages(c('plumber', 'jsonlite', 'dplyr', 'tidyr', 'readr', 'purrr', 'remotes'))"
 RUN R -e "remotes::install_github('elivatsaas/peakPerformR')"
 
-# Create app directory
+# Copy application files
 WORKDIR /app
-COPY . /app
+COPY plumber.R /app/
+COPY app.R /app/
+COPY data/ /app/data/
 
 # Expose port
 EXPOSE 8080
