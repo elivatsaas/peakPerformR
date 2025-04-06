@@ -1,35 +1,100 @@
-- name: Build and push
-        uses: docker/build-push-action@v4
-        with:
-          context: ./plumber
-          push: true
-          tags: ghcr.io/${{ toLowerCase(github.repository) }}/plumber-api:${{ github.sha }}
+# .github/workflows/build-deploy-plumber-api.yml
+name: Build Plumber API and Deploy to Azure Container Apps
+
 on:
   push:
-    branches: [master]
+    branches: [ master ] # Or your main production branch, e.g., main
     paths:
-      - "plumber/**"
-  workflow_dispatch:
+      - 'plumber/**' # Trigger only if files in the plumber directory change
+  workflow_dispatch: # Allow manual triggering
+
+# --- OIDC Permissions ---
+# Required permissions for Azure Login using OIDC. Remove if using service principal secret.
+permissions:
+  id-token: write # Required for federated credential identity
+  contents: read  # Required to checkout the code
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    environment: production # Optional: Define a GitHub Environment for secrets/protection rules
+
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
 
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v2
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GITHUB_TOKEN }} # Use the built-in GITHUB_TOKEN
 
-      - name: Build and push
-        uses: docker/build-push-action@v4
+      - name: Build and Push Docker Image
+        id: build-push # Give this step an ID to reference its outputs if needed
+        uses: docker/build-push-action@v5
         with:
-          context: ./plumber
+          context: ./plumber # Path to the directory containing your Dockerfile
           push: true
-          tags: ghcr.io/${{ github.repository }}/plumber-api:${{ github.sha }}
+          # Use toLowerCase for the repository part of the tag
+          # Tag with unique SHA and 'latest'
+          tags: |
+            ghcr.io/${{ toLowerCase(github.repository) }}/plumber-api:${{ github.sha }}
+            ghcr.io/${{ toLowerCase(github.repository) }}/plumber-api:latest
+          # Enable build cache for faster builds
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # --- Azure Login ---
+      # Choose ONE of the following login methods: OIDC (Recommended) or Service Principal Secret
+
+      # Method 1: Azure Login using OpenID Connect (OIDC) - RECOMMENDED
+      # Requires setup in Azure AD:
+      # 1. Create an Azure AD Application Registration.
+      # 2. Create a Federated Credential under the App Registration for your GitHub repo/branch/environment.
+      # 3. Grant the App Registration's Service Principal the necessary roles (e.g., Contributor) on your Resource Group or Container App.
+      # 4. Add AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID as GitHub Secrets.
+      - name: Log in to Azure with OIDC
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # # Method 2: Azure Login using Service Principal Secret - (Use only if OIDC is not possible)
+      # # Requires setup in Azure:
+      # # 1. Create an Azure Service Principal.
+      # # 2. Grant it necessary roles (e.g., Contributor) on your Resource Group or Container App.
+      # # 3. Create a GitHub Secret named AZURE_CREDENTIALS containing the JSON output of `az ad sp create-for-rbac ...`
+      # - name: Log in to Azure with Service Principal
+      #   uses: azure/login@v1
+      #   with:
+      #     creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy to Azure Container Apps
+        uses: azure/container-apps-deploy-action@v1
+        with:
+          # --- Required Azure Resource Info ---
+          resource-group: YOUR_AZURE_RESOURCE_GROUP # Replace with your actual resource group name
+          container-app-name: YOUR_CONTAINER_APP_NAME # Replace with your actual container app name
+
+          # --- Image and Registry Details ---
+          # Use the specific, immutable image tag built in the previous step
+          image: ghcr.io/${{ toLowerCase(github.repository) }}/plumber-api:${{ github.sha }}
+          registry-url: ghcr.io
+          registry-username: ${{ github.actor }}
+          # Use GITHUB_TOKEN to allow ACA to pull from GHCR (assuming your repo is private/internal)
+          # Ensure ACA has registry configured or pass credentials if needed.
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+          # --- Optional ACA Configuration ---
+          # You can add other parameters here to configure environment variables,
+          # scaling rules, ingress, secrets, etc., on your Container App if needed.
+          # Example:
+          # yaml-config-path: ./.azure/container-app-config.yaml # Path to a YAML file with ACA config
+          # environment-variables: |
+          #   MY_ENV_VAR=somevalue
+          #   ANOTHER_VAR=${{ secrets.MY_ACA_SECRET }}
