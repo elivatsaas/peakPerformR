@@ -1,71 +1,26 @@
-name: Deploy to Azure Container Apps
+name: Deploy to Azure Web App
 
 on:
   push:
-    branches: [ main ]  # adjust to your main branch name if different
-  workflow_dispatch:  # allows manual triggering
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    
     steps:
-    - uses: actions/checkout@v3
-    
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v2
-    
-    # Debug step to verify secrets (will be masked in logs)
-    - name: Debug Registry Information
-      run: |
-        echo "Registry info check..."
-        if [ -z "${{ secrets.PEAKPERFORMRAPI_REGISTRY_USERNAME }}" ]; then
-          echo "Warning: PEAKPERFORMRAPI_REGISTRY_USERNAME is not set or empty"
-        else
-          echo "PEAKPERFORMRAPI_REGISTRY_USERNAME is set"
-        fi
+      - name: Checkout repository
+        uses: actions/checkout@v3
         
-        if [ -z "${{ secrets.PEAKPERFORMRAPI_REGISTRY_PASSWORD }}" ]; then
-          echo "Warning: PEAKPERFORMRAPI_REGISTRY_PASSWORD is not set or empty"
-        else
-          echo "PEAKPERFORMRAPI_REGISTRY_PASSWORD is set"
-        fi
-        
-        # We need to add this secret
-        if [ -z "${{ secrets.AZURE_CONTAINER_REGISTRY_URL }}" ]; then
-          echo "Warning: AZURE_CONTAINER_REGISTRY_URL is not set or empty"
-        else
-          echo "AZURE_CONTAINER_REGISTRY_URL is set"
-        fi
-    
-    - name: Log in to Azure Container Registry
-      uses: azure/docker-login@v1
-      with:
-        login-server: ${{ secrets.AZURE_CONTAINER_REGISTRY_URL }}
-        username: ${{ secrets.PEAKPERFORMRAPI_REGISTRY_USERNAME }}
-        password: ${{ secrets.PEAKPERFORMRAPI_REGISTRY_PASSWORD }}
-    
-    - name: Build and push image to ACR
-      uses: docker/build-push-action@v4
-      with:
-        context: .
-        push: true
-        tags: ${{ secrets.AZURE_CONTAINER_REGISTRY_URL }}/peakperformr-api:${{ github.sha }}, ${{ secrets.AZURE_CONTAINER_REGISTRY_URL }}/peakperformr-api:latest
-    
-    - name: Azure login with service principal
-      uses: azure/login@v1
-      with:
-        client-id: ${{ secrets.PEAKPERFORMRAPI_AZURE_CLIENT_ID }}
-        tenant-id: ${{ secrets.PEAKPERFORMRAPI_AZURE_TENANT_ID }}
-        subscription-id: ${{ secrets.PEAKPERFORMRAPI_AZURE_SUBSCRIPTION_ID }}
-        client-secret: ${{ secrets.PEAKPERFORMRAPI_AZURE_CLIENT_SECRET }}  # You need to add this
-    
-    - name: Deploy to Azure Container App
-      uses: azure/CLI@v1
-      with:
-        inlineScript: |
-          az containerapp update \
-            --name ${{ secrets.AZURE_CONTAINER_APP_NAME }} \
-            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
-            --image ${{ secrets.AZURE_CONTAINER_REGISTRY_URL }}/peakperformr-api:${{ github.sha }} \
-            --env-vars "ALLOWED_ORIGIN=*" "R_CONFIG_ACTIVE=production"
+      - name: Log in to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          
+      - name: Deploy to Azure Web App
+        id: deploy-to-webapp
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: ${{ secrets.AZURE_WEBAPP_NAME }}
+          slot-name: 'production'
+          images: 'rocker/plumber:latest'
