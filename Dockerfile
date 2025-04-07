@@ -27,18 +27,11 @@ RUN echo "--- Installing REQUIRED CRAN dependencies (excluding baseballr) ---" &
     'dplyr', \
     'purrr', \
     'tidyr', \
-    'ggplot2',  # Keep if visualizations are used by the API
     'stringr', \
     'lubridate', \
     'httr', \
     'jsonlite', \
-    # 'baseballr', # Skipped
-    'fastRhockey', \
-    'hoopR', \
-    'itscalledsoccer', \
     'magrittr', \
-    'nflreadr', \
-    'wehoop', \
     'rlang', \
     'tibble' \
     ), repos='https://cloud.r-project.org/', Ncpus = 2)"
