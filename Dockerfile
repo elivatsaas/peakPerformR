@@ -1,7 +1,8 @@
 # --- Base Image ---
 # Use a specific version tag instead of 'latest' for reproducible builds.
 # Find available tags at: https://hub.docker.com/r/rocker/plumber/tags
-FROM rocker/plumber:4.3.1 # Replace with your desired specific version
+# Replace with your desired specific version
+FROM rocker/plumber:4.3.1
 
 # --- Install R Packages ---
 # Install CRAN packages first. Using install2.r is good practice.
