@@ -1,4 +1,4 @@
-# Start with a specific R version image
+# Start with the specific R version you require (matching the *newly generated* renv.lock)
 FROM rocker/r-ver:4.3.1
 
 # Set DEBIAN_FRONTEND to noninteractive
@@ -16,24 +16,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # --- Configure renv & Install Packages ---
 WORKDIR /app
 
-# Copy only the renv lockfile first (leverages Docker cache)
-# Ensure renv.lock is in your project root and up-to-date!
+# Copy the renv lockfile (This should now be the one generated with R 4.3.1)
 COPY renv.lock .
 
-# Install renv itself if not already part of the base image (or update it)
-# RUN R -e "install.packages('renv', version = '1.1.4')" # Optionally pin renv version
-
 # Restore packages specified in renv.lock using renv
-# This installs packages into the renv library within the image
+# This should now work correctly as the lockfile matches the R version
 RUN R -e "renv::restore()"
+
+# --- Verification Step (Optional but Recommended) ---
+# Check if renv believes all packages are installed after restore
+RUN R -e "cat('--- renv status after restore ---\n'); options(width=120); renv::status()"
 
 # --- Configure Application ---
 # Copy the rest of your application code
-# This includes your plumber/, data/, .Rprofile, renv/ directory (if needed), start.sh etc.
 COPY . /app/
 
 # Install your custom GitHub package AFTER renv::restore()
-# (Unless it's already managed within your renv.lock file, in which case this is redundant)
+# (Only needed if 'peakPerformR' is NOT managed within your renv.lock file)
 RUN R -e "remotes::install_github('elivatsaas/peakPerformR')"
 
 # Verify files copied (Optional Debugging)
@@ -43,11 +42,12 @@ RUN echo "--- Files in /app after COPY ---" && ls -lha /app && echo "--- Files i
 RUN mkdir -p ./data
 
 # --- Setup Startup Script ---
-# Make the copied start.sh executable (Assuming you use the COPY method for start.sh)
+# Make the copied start.sh executable
 RUN chmod +x /app/start.sh
 
 # --- Expose Port and Run ---
+# Expose the standard port 80, which matches the Azure Target Port
 EXPOSE 80
 
-# Run via the start.sh script (which will now run within the renv-aware environment)
+# Run via the start.sh script
 CMD ["/app/start.sh"]
