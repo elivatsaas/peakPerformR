@@ -38,14 +38,7 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: ${{ secrets.DOCKER_HUB_USERNAME }}/peakperformr-api:latest
-          # Add timeout settings
-          builder-args: |
-            --network=host
-          # Add retry mechanism
-          push-args: |
-            --max-concurrent-uploads=1
-            --retry=5
-            --retry-delay=3s
+          network: host
       
       - name: Azure login
         uses: azure/login@v1
