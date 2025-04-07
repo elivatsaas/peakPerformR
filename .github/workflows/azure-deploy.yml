@@ -54,14 +54,32 @@ jobs:
           subscription-id: ${{ secrets.PEAKPERFORMRAPI_AZURE_SUBSCRIPTION_ID }}
           enable-AzPSSession: true
       
+      - name: Set Azure CLI debug logging
+        run: |
+          az config set core.collect_telemetry=yes
+          az config set logging.log_destination=stdout
+          # Check if we can access the subscription
+          echo "Checking subscription access..."
+          az account show
+          # Check if we can list resource groups
+          echo "Listing resource groups..."
+          az group list --query "[].name" -o tsv
+      
       - name: Update Container App
         uses: azure/CLI@v1
         with:
           inlineScript: |
-            echo "Updating container app..."
+            echo "Setting up error handling..."
+            set -e
+            set -o pipefail
+            
+            echo "Getting Container App details..."
+            az containerapp show --name ${{ secrets.PEAKPERFORMRAPI_CONTAINER_APP_NAME }} --resource-group ${{ secrets.PEAKPERFORMRAPI_RESOURCE_GROUP }} || echo "Error getting Container App details"
+            
+            echo "Updating container app image..."
             az containerapp update \
               --name ${{ secrets.PEAKPERFORMRAPI_CONTAINER_APP_NAME }} \
               --resource-group ${{ secrets.PEAKPERFORMRAPI_RESOURCE_GROUP }} \
               --image ${{ secrets.DOCKER_HUB_USERNAME }}/peakperformr-api:latest \
-              --env-vars "ALLOWED_ORIGIN=${{ secrets.PEAKPERFORMRAPI_ALLOWED_ORIGIN }}" "R_CONFIG_ACTIVE=production"
-            echo "Container app update completed."
+              --set-env-vars "ALLOWED_ORIGIN=${{ secrets.PEAKPERFORMRAPI_ALLOWED_ORIGIN }}" "R_CONFIG_ACTIVE=production" \
+              --debug
