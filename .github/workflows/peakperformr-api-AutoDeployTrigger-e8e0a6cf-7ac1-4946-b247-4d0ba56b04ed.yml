@@ -2,12 +2,13 @@ name: Deploy to Azure Container Apps
 
 on:
   push:
-    branches: [ main ]  # adjust as needed
+    branches: [ main ]  # adjust to your main branch name if different
   workflow_dispatch:  # allows manual triggering
 
 env:
-  REGISTRY_LOGIN_SERVER: ${{ secrets.REGISTRY_LOGIN_SERVER }}
-  IMAGE_NAME: plumber-api
+  # You'll need to add this as a new secret
+  REGISTRY_LOGIN_SERVER: ${{ secrets.PEAKPERFORMRAPI_REGISTRY_LOGIN_SERVER }}
+  IMAGE_NAME: peakperformr-api
 
 jobs:
   build-and-deploy:
@@ -23,8 +24,8 @@ jobs:
       uses: azure/docker-login@v1
       with:
         login-server: ${{ env.REGISTRY_LOGIN_SERVER }}
-        username: ${{ secrets.REGISTRY_USERNAME }}
-        password: ${{ secrets.REGISTRY_PASSWORD }}
+        username: ${{ secrets.PEAKPERFORMRAPI_REGISTRY_USERNAME }}
+        password: ${{ secrets.PEAKPERFORMRAPI_REGISTRY_PASSWORD }}
     
     - name: Build and push image to ACR
       uses: docker/build-push-action@v4
@@ -33,17 +34,20 @@ jobs:
         push: true
         tags: ${{ env.REGISTRY_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}, ${{ env.REGISTRY_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:latest
     
-    - name: Azure login
+    - name: Azure login with service principal
       uses: azure/login@v1
       with:
-        creds: ${{ secrets.AZURE_CREDENTIALS }}
+        client-id: ${{ secrets.PEAKPERFORMRAPI_AZURE_CLIENT_ID }}
+        tenant-id: ${{ secrets.PEAKPERFORMRAPI_AZURE_TENANT_ID }}
+        subscription-id: ${{ secrets.PEAKPERFORMRAPI_AZURE_SUBSCRIPTION_ID }}
     
     - name: Deploy to Azure Container App
       uses: azure/CLI@v1
       with:
         inlineScript: |
+          # You'll need to add these as new secrets
           az containerapp update \
-            --name ${{ secrets.CONTAINER_APP_NAME }} \
-            --resource-group ${{ secrets.RESOURCE_GROUP }} \
+            --name ${{ secrets.PEAKPERFORMRAPI_CONTAINER_APP_NAME }} \
+            --resource-group ${{ secrets.PEAKPERFORMRAPI_RESOURCE_GROUP }} \
             --image ${{ env.REGISTRY_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
-            --env-vars "ALLOWED_ORIGIN=${{ secrets.ALLOWED_ORIGIN }}" "R_CONFIG_ACTIVE=production"
+            --env-vars "ALLOWED_ORIGIN=${{ secrets.PEAKPERFORMRAPI_ALLOWED_ORIGIN }}" "R_CONFIG_ACTIVE=production"
