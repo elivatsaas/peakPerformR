@@ -49,5 +49,5 @@ RUN mkdir -p ./data
 RUN chmod +x /app/start.sh
 
 # --- Expose Port and Run ---
-EXPOSE 80
+EXPOSE 49391
 CMD ["/app/start.sh"]
