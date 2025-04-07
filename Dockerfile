@@ -1,14 +1,13 @@
-# Dockerfile without renv - installing packages directly including git
-# Attempting to install peakPerformR without its dependencies
+# Dockerfile without renv - Installing peakPerformR without dependencies
 
-# Start with a specific R version image (Using 4.4.1 as previously discussed)
-FROM rocker/r-ver:4.4.1
+# Use R 4.3.1 as in the "working" log, but be aware of potential future issues
+FROM rocker/r-ver:4.3.1
 
 # Set DEBIAN_FRONTEND to noninteractive
 ENV DEBIAN_FRONTEND=noninteractive
 
 # --- Install System Dependencies ---
-# Added git, required by remotes::install_github
+# Added git
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libssl-dev \
@@ -18,37 +17,40 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # --- Install R Packages Directly ---
-# Install packages listed in peakPerformR's DESCRIPTION Imports
-# *CRITICAL*: Ensure this step completes successfully in the build log.
-RUN echo "--- Installing CRAN dependencies ---" && \
+# Install packages needed for runtime (plumber), installation (remotes),
+# AND *all required* packages listed in Imports *EXCEPT* baseballr.
+# *CRITICAL*: Ensure this list covers everything your API *actually uses*.
+RUN echo "--- Installing REQUIRED CRAN dependencies (excluding baseballr) ---" && \
     R -e "install.packages(c( \
     'plumber', \
     'remotes', \
     'dplyr', \
     'purrr', \
     'tidyr', \
-    'ggplot2', \
+    'ggplot2',  # Keep if visualizations are used by the API
     'stringr', \
     'lubridate', \
     'httr', \
     'jsonlite', \
-    'stats', \
+    # 'baseballr', # Skipped
+    'fastRhockey', \
+    'hoopR', \
+    'itscalledsoccer', \
     'magrittr', \
+    'nflreadr', \
+    'wehoop', \
     'rlang', \
-    'tibble', \
-    'utils' \
-    ), repos='https://cloud.r-project.org/')"
+    'tibble' \
+    ), repos='https://cloud.r-project.org/', Ncpus = 2)"
 
 # --- Configure Application ---
 WORKDIR /app
-
-# Copy your application code
 COPY . /app/
 
-# --- Install Your GitHub Package ---
-# Added dependencies = FALSE to skip installing its listed dependencies
-RUN R -e "remotes::install_github('elivatsaas/peakPerformR')"
-
+# --- Install Your GitHub Package (Skipping its Dependencies) ---
+# Added dependencies = FALSE
+RUN echo "--- Installing GitHub package peakPerformR (dependencies=FALSE) ---" && \
+    R -e "remotes::install_github('elivatsaas/peakPerformR', dependencies = FALSE)"
 
 # --- Optional Post-Install Verification ---
 # Check if the package can be loaded (basic check)
@@ -58,17 +60,12 @@ RUN echo "--- Verifying peakPerformR installation ---" && \
 
 # --- Verify Copied Application Files ---
 RUN echo "--- Files in /app after COPY ---" && ls -lha /app && echo "--- Files in /app/plumber ---" && ls -lha /app/plumber || echo "/app/plumber not found or empty"
-
 # Ensure the data directory exists (safer after COPY)
 RUN mkdir -p ./data
-
 # --- Setup Startup Script ---
-# Make the copied start.sh executable (ensure it exists and is copied by 'COPY . /app/')
 RUN chmod +x /app/start.sh
-
 # --- Expose Port and Run ---
-# Expose the standard port 80 (ensure start.sh uses this port)
+# Use port 80 to align with typical Azure Container App setup
 EXPOSE 80
-
 # Run via the start.sh script (ensure it uses port 80)
 CMD ["/app/start.sh"]
