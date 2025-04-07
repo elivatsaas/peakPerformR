@@ -1,43 +1,51 @@
-# --- Base Image ---
-# Use a specific version tag instead of 'latest' for reproducible builds.
-# Find available tags at: https://hub.docker.com/r/rocker/plumber/tags
-# Replace with your desired specific version
-FROM rocker/plumber:4.3.1
+# Start with a base R version image
+FROM rocker/r-ver:4.3.1 # Or use latest: FROM rocker/r-ver:latest
 
-# --- Install R Packages ---
-# Install CRAN packages first. Using install2.r is good practice.
-# Keeping them in one RUN command improves layer caching.
+# Set DEBIAN_FRONTEND to noninteractive to avoid prompts during apt-get install
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Update apt-get and install system dependencies if needed (e.g., for packages with C code)
+# RUN apt-get update && apt-get install -y --no-install-recommends \
+#    some-system-dependency \
+#    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install plumber and required packages using install2.r for better dependency handling
 RUN install2.r --error --deps TRUE \
+    plumber \
     jsonlite \
     dplyr \
     tidyr \
     readr \
     purrr \
     remotes \
-    && rm -rf /tmp/downloaded_packages/ /var/lib/apt/lists/* # Clean up cache
+    rlang \
+    logger \
+    debugme \
+    && rm -rf /tmp/downloaded_packages/ # Clean up
 
-# Install custom package from GitHub.
-# For better reproducibility, consider using a specific commit hash:
-# RUN R -e "remotes::install_github('elivatsaas/peakPerformR@your_commit_hash')"
+# Install your custom package
+# Consider using a specific commit hash for reproducibility: remotes::install_github('elivatsaas/peakPerformR@commit_hash')
 RUN R -e "remotes::install_github('elivatsaas/peakPerformR')"
 
-# --- Application Setup ---
-# Set the working directory for subsequent commands
+# Set working directory
 WORKDIR /app
 
-# Create the data directory within the working directory
+# Copy application files. Copying plumber directory specifically might be better for caching
+# COPY plumber ./plumber
+# COPY data ./data # If data is separate
+# Copying everything can be okay for debugging but invalidates cache easily
+COPY . .
+
+# Ensure the data directory exists (redundant if copied, but safe)
 RUN mkdir -p ./data
 
-# Copy application files *after* dependencies are installed.
-# This leverages Docker caching: if only your code changes,
-# the R package installation layers won't need to be rebuilt.
-COPY plumber/plumber.R ./plumber.R
-COPY plumber/data/ ./data/
+# Make the startup script executable
+# First, ensure the script content is correct and saved as start.sh in your repo
+COPY start.sh ./start.sh
+RUN chmod +x ./start.sh
 
-# --- Runtime Configuration ---
-# Expose the port the application will listen on
-EXPOSE 8080
+# CRITICAL: Expose port 80 for Azure Container Apps default behavior
+EXPOSE 80
 
-# Define the command to run the application
-# Use the relative path now that WORKDIR is set.
-CMD ["R", "-e", "pr <- plumber::plumb('plumber.R'); pr$run(host='0.0.0.0', port=8080)"]
+# Run the API via the startup script
+CMD ["./start.sh"]
