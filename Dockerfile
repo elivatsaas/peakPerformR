@@ -32,13 +32,7 @@ RUN R -e "install.packages(c( \
     'httr', \
     'jsonlite', \
     'stats', \
-    'baseballr', \
-    'fastRhockey', \
-    'hoopR', \
-    'itscalledsoccer', \
     'magrittr', \
-    'nflreadr', \
-    'wehoop', \
     'rlang', \
     'tibble', \
     'utils' \
