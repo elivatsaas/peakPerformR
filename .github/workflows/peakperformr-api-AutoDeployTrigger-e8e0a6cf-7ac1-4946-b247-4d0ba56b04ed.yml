@@ -1,0 +1,48 @@
+name: Trigger auto deployment for peakperformr-api
+
+# When this action will be executed
+on:
+  # Automatically trigger it when detected changes in repo
+  push:
+    branches: 
+      [ master ]
+    paths:
+    - '**'
+    - '.github/workflows/peakperformr-api-AutoDeployTrigger-e8e0a6cf-7ac1-4946-b247-4d0ba56b04ed.yml'
+
+  # Allow manual trigger 
+  workflow_dispatch:      
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions: 
+      id-token: write #This is required for requesting the OIDC JWT Token
+      contents: read #Required when GH token is used to authenticate with private repo
+
+    steps:
+      - name: Checkout to the branch
+        uses: actions/checkout@v2
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.PEAKPERFORMRAPI_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.PEAKPERFORMRAPI_AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.PEAKPERFORMRAPI_AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build and push container image to registry
+        uses: azure/container-apps-deploy-action@v2
+        with:
+          appSourcePath: ${{ github.workspace }}/plumber/DockerFile
+          _dockerfilePathKey_: _dockerfilePath_
+          registryUrl: ghcr.io
+          registryUsername: ${{ secrets.PEAKPERFORMRAPI_REGISTRY_USERNAME }}
+          registryPassword: ${{ secrets.PEAKPERFORMRAPI_REGISTRY_PASSWORD }}
+          containerAppName: peakperformr-api
+          resourceGroup: NAUFLG-asc-export
+          imageToBuild: ghcr.io/peakperformr-api:${{ github.sha }}
+          _buildArgumentsKey_: |
+            _buildArgumentsValues_
+
+
