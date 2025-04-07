@@ -1,25 +1,24 @@
-# Dockerfile without renv - Installing peakPerformR without dependencies
+# Dockerfile without renv - Fixing Rprofile issue and adding libsodium-dev
 
-# Use R 4.3.1 as in the "working" log, but be aware of potential future issues
+# Use R 4.3.1 as in the log, but consider 4.4.1 if further issues arise
 FROM rocker/r-ver:4.3.1
 
 # Set DEBIAN_FRONTEND to noninteractive
 ENV DEBIAN_FRONTEND=noninteractive
 
 # --- Install System Dependencies ---
-# Added git
+# Added git AND libsodium-dev
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libssl-dev \
     libcurl4-openssl-dev \
     libxml2-dev \
     git \
+    libsodium-dev `# <--- Added for sodium package` \
  && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # --- Install R Packages Directly ---
-# Install packages needed for runtime (plumber), installation (remotes),
-# AND *all required* packages listed in Imports *EXCEPT* baseballr.
-# *CRITICAL*: Ensure this list covers everything your API *actually uses*.
+# *CRITICAL*: This step MUST succeed now. Check build logs carefully.
 RUN echo "--- Installing REQUIRED CRAN dependencies (excluding baseballr) ---" && \
     R -e "install.packages(c( \
     'plumber', \
@@ -27,26 +26,35 @@ RUN echo "--- Installing REQUIRED CRAN dependencies (excluding baseballr) ---" &
     'dplyr', \
     'purrr', \
     'tidyr', \
+    'ggplot2', \
     'stringr', \
     'lubridate', \
     'httr', \
     'jsonlite', \
+    # 'baseballr', # Skipped
+    'fastRhockey', \
+    'hoopR', \
+    'itscalledsoccer', \
     'magrittr', \
+    'nflreadr', \
+    'wehoop', \
     'rlang', \
-    'tibble' \
+    'tibble', \
+    'sodium',  # Make sure sodium is installed (dependency of others)
+    'httpuv'   # Make sure httpuv is installed (dependency of plumber)
     ), repos='https://cloud.r-project.org/', Ncpus = 2)"
 
 # --- Configure Application ---
 WORKDIR /app
+# Ensure the .Rprofile being copied no longer sources renv/activate.R
 COPY . /app/
 
 # --- Install Your GitHub Package (Skipping its Dependencies) ---
-# Added dependencies = FALSE
+# This should now run without the Rprofile error
 RUN echo "--- Installing GitHub package peakPerformR (dependencies=FALSE) ---" && \
     R -e "remotes::install_github('elivatsaas/peakPerformR', dependencies = FALSE)"
 
 # --- Optional Post-Install Verification ---
-# Check if the package can be loaded (basic check)
 RUN echo "--- Verifying peakPerformR installation ---" && \
     R -e "if (!requireNamespace('peakPerformR', quietly = TRUE)) stop('peakPerformR failed to install or load')" && \
     echo "peakPerformR loaded successfully."
