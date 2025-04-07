@@ -41,7 +41,7 @@ RUN echo "--- Installing REQUIRED CRAN dependencies (excluding baseballr) ---" &
     'rlang', \
     'tibble', \
     'sodium', \
-    'httpuv'  
+    'httpuv'  \
     ), repos='https://cloud.r-project.org/', Ncpus = 2)"
 
 # --- Configure Application ---
