@@ -1,4 +1,5 @@
 # Dockerfile without renv - installing packages directly including git
+# Attempting to install peakPerformR without its dependencies
 
 # Start with a specific R version image (Using 4.4.1 as previously discussed)
 FROM rocker/r-ver:4.4.1
@@ -13,13 +14,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl-dev \
     libcurl4-openssl-dev \
     libxml2-dev \
-    git `# <--- Added git` \
+    git \
  && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # --- Install R Packages Directly ---
-# Install packages needed for installation (remotes) and runtime (plumber, etc.)
-# Plus all packages listed in the 'Imports' section of peakPerformR's DESCRIPTION
-# install.packages() should handle most transitive dependencies.
+# Install packages listed in peakPerformR's DESCRIPTION Imports
+# *CRITICAL*: Ensure this step completes successfully in the build log.
 RUN echo "--- Installing CRAN dependencies ---" && \
     R -e "install.packages(c( \
     'plumber', \
@@ -33,7 +33,7 @@ RUN echo "--- Installing CRAN dependencies ---" && \
     'httr', \
     'jsonlite', \
     'stats', \
-    'magrittr', 
+    'magrittr', \
     'rlang', \
     'tibble', \
     'utils' \
@@ -42,14 +42,13 @@ RUN echo "--- Installing CRAN dependencies ---" && \
 # --- Configure Application ---
 WORKDIR /app
 
-# Copy your application code (which might include peakPerformR source if not installing from GitHub)
-# This includes your plumber/, data/, start.sh etc.
+# Copy your application code
 COPY . /app/
 
 # --- Install Your GitHub Package ---
-# Installs the public package from GitHub after its dependencies are installed.
-RUN echo "--- Installing GitHub package peakPerformR ---" && \
-    R -e "remotes::install_github('elivatsaas/peakPerformR')"
+# Added dependencies = FALSE to skip installing its listed dependencies
+RUN echo "--- Installing GitHub package peakPerformR (dependencies=FALSE) ---" && \
+    R -e "remotes::install_github('elivatsaas/peakPerformR', dependencies = FALSE)"
 
 # --- Optional Post-Install Verification ---
 # Check if the package can be loaded (basic check)
