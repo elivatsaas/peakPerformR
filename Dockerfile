@@ -33,13 +33,7 @@ RUN echo "--- Installing CRAN dependencies ---" && \
     'httr', \
     'jsonlite', \
     'stats', \
-    'baseballr', \
-    'fastRhockey', \
-    'hoopR', \
-    'itscalledsoccer', \
-    'magrittr', \
-    'nflreadr', \
-    'wehoop', \
+    'magrittr', 
     'rlang', \
     'tibble', \
     'utils' \
