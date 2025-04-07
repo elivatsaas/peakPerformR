@@ -1,7 +1,7 @@
 name: Build and Deploy to Azure
 on:
   push:
-    branches: [ master ]  # Updated to match your branch name
+    branches: [ master ]
   workflow_dispatch:
 jobs:
   build-and-deploy:
@@ -10,24 +10,42 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
       
-      # Login to Azure Container Registry instead of Docker Hub
-      - name: Login to Azure Container Registry
+      # Try Docker Hub login instead since ACR is timing out
+      - name: Login to Docker Hub
         uses: docker/login-action@v2
         with:
-          registry: ${{ secrets.PEAKPERFORMRAPI_REGISTRY_LOGIN_SERVER }}
-          username: ${{ secrets.PEAKPERFORMRAPI_REGISTRY_USERNAME }}
-          password: ${{ secrets.PEAKPERFORMRAPI_REGISTRY_PASSWORD }}
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
       
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
+      
+      # Network diagnostics to help debug
+      - name: Network diagnostics
+        run: |
+          echo "Running network diagnostics..."
+          echo "DNS resolution test:"
+          nslookup hub.docker.com
+          echo "Connection test:"
+          curl -v https://hub.docker.com/v2/ || true
+          echo "Registry ping:"
+          timeout 10 docker info || true
       
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
         with:
           context: .
-          file: ./Dockerfile  # Specify the Dockerfile location
+          file: ./Dockerfile
           push: true
-          tags: ${{ secrets.PEAKPERFORMRAPI_REGISTRY_LOGIN_SERVER }}/peakperformr-api:latest
+          tags: ${{ secrets.DOCKER_HUB_USERNAME }}/peakperformr-api:latest
+          # Add timeout settings
+          builder-args: |
+            --network=host
+          # Add retry mechanism
+          push-args: |
+            --max-concurrent-uploads=1
+            --retry=5
+            --retry-delay=3s
       
       - name: Azure login
         uses: azure/login@v1
@@ -40,8 +58,10 @@ jobs:
         uses: azure/CLI@v1
         with:
           inlineScript: |
+            echo "Updating container app..."
             az containerapp update \
               --name ${{ secrets.PEAKPERFORMRAPI_CONTAINER_APP_NAME }} \
               --resource-group ${{ secrets.PEAKPERFORMRAPI_RESOURCE_GROUP }} \
-              --image ${{ secrets.PEAKPERFORMRAPI_REGISTRY_LOGIN_SERVER }}/peakperformr-api:latest \
+              --image ${{ secrets.DOCKER_HUB_USERNAME }}/peakperformr-api:latest \
               --env-vars "ALLOWED_ORIGIN=${{ secrets.PEAKPERFORMRAPI_ALLOWED_ORIGIN }}" "R_CONFIG_ACTIVE=production"
+            echo "Container app update completed."
