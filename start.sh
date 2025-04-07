@@ -41,4 +41,4 @@ echo "Starting API using R script: ${PLUMBER_PATH}"
 
 # Execute Plumber API, listening on all interfaces (0.0.0.0) on the exposed port
 # Need to escape the $ in pr$run for the shell executing this line.
-exec R -e "options(warn=2); pr <- plumber::plumb(file='${PLUMBER_PATH}'); pr\\$run(host='0.0.0.0', port=80)"
+exec R -e "options(warn=2); pr <- plumber::plumb(file='${PLUMBER_PATH}'); pr\\$run(host='0.0.0.0', port=49391)"
