@@ -40,8 +40,8 @@ RUN echo "--- Installing REQUIRED CRAN dependencies (excluding baseballr) ---" &
     'wehoop', \
     'rlang', \
     'tibble', \
-    'sodium',  # Make sure sodium is installed (dependency of others)
-    'httpuv'   # Make sure httpuv is installed (dependency of plumber)
+    'sodium', \
+    'httpuv'  
     ), repos='https://cloud.r-project.org/', Ncpus = 2)"
 
 # --- Configure Application ---
