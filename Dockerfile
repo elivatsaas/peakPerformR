@@ -47,8 +47,8 @@ COPY . /app/
 
 # --- Install Your GitHub Package ---
 # Added dependencies = FALSE to skip installing its listed dependencies
-RUN echo "--- Installing GitHub package peakPerformR (dependencies=FALSE) ---" && \
-    R -e "remotes::install_github('elivatsaas/peakPerformR', dependencies = FALSE)"
+RUN R -e "remotes::install_github('elivatsaas/peakPerformR')"
+
 
 # --- Optional Post-Install Verification ---
 # Check if the package can be loaded (basic check)
