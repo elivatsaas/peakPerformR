@@ -1,7 +1,8 @@
-FROM rocker/plumber:latest
+FROM rocker/r-ver:latest
 
-# Install required packages
+# Install plumber and required packages
 RUN install2.r --error \
+    plumber \
     jsonlite \
     dplyr \
     tidyr \
