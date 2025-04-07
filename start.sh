@@ -38,11 +38,10 @@ mkdir -p /app/data
 echo "Data directory /app/data ensured."
 
 # --- PORT CORRECTION ---
-# Listen on port 80 to match the Docker EXPOSE directive and standard practice.
+# Listen on port 80 to match the Docker EXPOSE directive and the Azure Target Port.
 LISTEN_PORT=80
 echo "Starting API using R script: ${PLUMBER_PATH} on host 0.0.0.0, port ${LISTEN_PORT}"
 
-# Execute Plumber API, listening on all interfaces (0.0.0.0) on the EXPOSED port (80)
-# Need to escape the $ in pr$run for the shell executing this line.
+# Execute Plumber API, listening on all interfaces (0.0.0.0) on port 80
 # Added options(warn=2) to treat warnings as errors for stricter checking during startup.
 exec R -e "options(warn=2); pr <- plumber::plumb(file='${PLUMBER_PATH}'); pr\\$run(host='0.0.0.0', port=${LISTEN_PORT})"
