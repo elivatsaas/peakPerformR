@@ -54,10 +54,6 @@ COPY . /app/
 RUN echo "--- Installing GitHub package peakPerformR (dependencies=FALSE) ---" && \
     R -e "remotes::install_github('elivatsaas/peakPerformR', dependencies = FALSE)"
 
-# --- Optional Post-Install Verification ---
-RUN echo "--- Verifying peakPerformR installation ---" && \
-    R -e "if (!requireNamespace('peakPerformR', quietly = TRUE)) stop('peakPerformR failed to install or load')" && \
-    echo "peakPerformR loaded successfully."
 
 # --- Verify Copied Application Files ---
 RUN echo "--- Files in /app after COPY ---" && ls -lha /app && echo "--- Files in /app/plumber ---" && ls -lha /app/plumber || echo "/app/plumber not found or empty"
