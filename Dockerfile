@@ -1,5 +1,6 @@
 # Start with a base R version image
-FROM rocker/r-ver:4.3.1 # Or use latest: FROM rocker/r-ver:latest
+# Or use latest: FROM rocker/r-ver:latest
+FROM rocker/r-ver:4.3.1
 
 # Set DEBIAN_FRONTEND to noninteractive to avoid prompts during apt-get install
 ENV DEBIAN_FRONTEND=noninteractive
