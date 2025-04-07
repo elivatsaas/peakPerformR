@@ -1,65 +1,49 @@
-# .github/workflows/peakperformr-api-AutoDeployTrigger-e8e0a6cf-7ac1-4946-b247-4d0ba56b04ed.yml
-# Corrected version of the Azure-generated workflow
-
-name: Trigger auto deployment for peakperformr-api
+name: Deploy to Azure Container Apps
 
 on:
-  # Trigger only on changes within the 'plumber' directory or the workflow file itself
   push:
-    branches:
-      [ master ]
-    paths:
-      - 'plumber/**' # Corrected: Only watch the API code directory
-      - '.github/workflows/peakperformr-api-AutoDeployTrigger-e8e0a6cf-7ac1-4946-b247-4d0ba56b04ed.yml'
+    branches: [ main ]  # adjust as needed
+  workflow_dispatch:  # allows manual triggering
 
-  # Allow manual trigger
-  workflow_dispatch:
+env:
+  REGISTRY_LOGIN_SERVER: ${{ secrets.REGISTRY_LOGIN_SERVER }}
+  IMAGE_NAME: plumber-api
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write # Required for OIDC Azure Login
-      contents: read  # Required for checkout
-      packages: write # Required for pushing to GHCR (even by the combined action)
-
+    
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4 # Updated version
-
-      - name: Azure Login via OIDC
-        uses: azure/login@v1
-        with:
-          client-id: ${{ secrets.PEAKPERFORMRAPI_AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.PEAKPERFORMRAPI_AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.PEAKPERFORMRAPI_AZURE_SUBSCRIPTION_ID }}
-
-      - name: Build and deploy Container App
-        uses: azure/container-apps-deploy-action@v2 # Keeping v2 as chosen by Azure
-        with:
-          # Corrected: Provide the context path (directory containing Dockerfile)
-          appSourcePath: ${{ github.workspace }}/plumber
-          # Explicitly specify Dockerfile name if it's non-standard, otherwise action usually finds it
-          # dockerfilePath: Dockerfile # Optional, uncomment if needed
-
-          # Registry details (using secrets Azure likely created)
-          registryUrl: ghcr.io
-          registryUsername: ${{ secrets.PEAKPERFORMRAPI_REGISTRY_USERNAME }} # Should contain 'elivatsaas'
-          registryPassword: ${{ secrets.PEAKPERFORMRAPI_REGISTRY_PASSWORD }} # Should contain a PAT or similar token
-
-          # Target Azure Container App
-          containerAppName: peakperformr-api
-          resourceGroup: NAUFLG-asc-export
-
-          # Corrected: Image name format: ghcr.io/<owner>/<repo>/<image_name>:<tag>
-          # Using 'elivatsaas' as owner, 'peakperformr' (lowercase) as repo, 'api' as image suffix
-          # Ensure 'peakperformr-api' is the desired suffix, adjust if needed. MUST be lowercase.
-          imageToBuild: ghcr.io/elivatsaas/peakperformr/plumber-api:${{ github.sha }}
-          # Note: This assumes 'peakperformr-api' was intended to be derived from the repo name + suffix.
-          # If you truly want 'peakperformr-api' as the literal image name segment, use:
-          # imageToBuild: ghcr.io/elivatsaas/peakperformr-api:${{ github.sha }}
-          # Ensure elivatsaas/peakperformr-api package exists or gets created in GHCR.
-          # Let's use the simpler 'plumber-api' suffix based on directory:
-          # imageToBuild: ghcr.io/elivatsaas/peakperformr/plumber-api:${{ github.sha }}
-
-          # Removed invalid/placeholder build arguments key
+    - uses: actions/checkout@v3
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+    
+    - name: Log in to Azure Container Registry
+      uses: azure/docker-login@v1
+      with:
+        login-server: ${{ env.REGISTRY_LOGIN_SERVER }}
+        username: ${{ secrets.REGISTRY_USERNAME }}
+        password: ${{ secrets.REGISTRY_PASSWORD }}
+    
+    - name: Build and push image to ACR
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        push: true
+        tags: ${{ env.REGISTRY_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}, ${{ env.REGISTRY_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:latest
+    
+    - name: Azure login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+    
+    - name: Deploy to Azure Container App
+      uses: azure/CLI@v1
+      with:
+        inlineScript: |
+          az containerapp update \
+            --name ${{ secrets.CONTAINER_APP_NAME }} \
+            --resource-group ${{ secrets.RESOURCE_GROUP }} \
+            --image ${{ env.REGISTRY_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            --env-vars "ALLOWED_ORIGIN=${{ secrets.ALLOWED_ORIGIN }}" "R_CONFIG_ACTIVE=production"

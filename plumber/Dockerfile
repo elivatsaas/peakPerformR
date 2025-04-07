@@ -1,35 +1,20 @@
-# Use a specific R version base image
-FROM rocker/r-ver:4.2.0
+# Use rocker/plumber which already has plumber installed
+FROM rocker/plumber:4.2.0
 
-# Install system dependencies needed for R packages
-# Combine steps and clean up apt cache to reduce image size
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libcurl4-openssl-dev \
-    libssl-dev \
-    libxml2-dev \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install required R packages from CRAN
-# Consider combining into one RUN layer if desired, though less critical
-RUN R -e "install.packages(c('plumber', 'jsonlite', 'dplyr', 'tidyr', 'readr', 'purrr', 'remotes'), repos='https://cloud.r-project.org/')"
-
-# Install your custom package from GitHub
-RUN R -e "remotes::install_github('elivatsaas/peakPerformR')"
-
-# Set the working directory in the container
+# Set the working directory
 WORKDIR /app
 
-# Copy only necessary application files
-# plumber.R contains the API logic
-COPY plumber.R /app/
-# Copy pre-computed data required by the API
-COPY data/ /app/data/
-# COPY app.R /app/ # Removed: Only copy if app.R is explicitly needed by your CMD or entrypoint
+# Install additional R packages
+RUN install2.r --error --deps TRUE jsonlite dplyr tidyr readr purrr remotes && \
+    R -e "remotes::install_github('elivatsaas/peakPerformR')"
 
-# Expose the port the Plumber API will run on (for documentation/runtime mapping)
+# Copy application files
+# Since your Dockerfile is in the plumber directory, we use . to refer to current directory
+COPY plumber.R /app/
+COPY data/ /app/data/
+
+# Expose the port
 EXPOSE 8080
 
-# Define the command to run the Plumber API
-# Use JSON format for CMD for better signal handling (addresses warning)
-CMD ["R", "-e", "library(plumber); pr <- plumber::plumb('plumber.R'); pr$run(host='0.0.0.0', port=8080)"]
+# Command to run the API
+CMD ["/usr/local/bin/R", "-e", "pr <- plumber::plumb('/app/plumber.R'); pr$run(host='0.0.0.0', port=8080)"]
