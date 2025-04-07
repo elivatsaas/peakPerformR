@@ -1,9 +1,8 @@
 # plumber.R - Production Ready API Endpoint with CORS
-# v2023-04-08 - Refined for Production Deployment
+# v2023-04-07 - Added CORS filter for frontend interaction
 
 # --- Load Required Libraries ---
-# Assumes these are managed by renv for reproducible builds.
-# Ensure renv.lock reflects these packages and peakPerformR installed from GitHub.
+# Ensure these are installed in the deployment environment via renv
 suppressPackageStartupMessages({
   library(plumber)
   library(jsonlite)
@@ -11,31 +10,25 @@ suppressPackageStartupMessages({
   library(tidyr)
   library(readr)
   library(purrr)
-  library(peakPerformR) # Your custom package - Ensure internal errors are resolved
+  library(peakPerformR) # Your custom package
 })
-message("INFO: Required packages loaded. Custom package 'peakPerformR' loaded.")
+message("Required packages loaded. Custom package 'peakPerformR' loaded.")
 
 # --- Utility Functions ---
-# Safe default operator: returns y if x is NULL, otherwise x
 `%||%` <- function(x, y) {
   if (is.null(x)) y else x
 }
 
 # --- Load Pre-Computed Base Data (Load ONCE at API startup) ---
-# Using a dedicated environment avoids polluting the global environment.
 .API_ENV <- new.env(parent = emptyenv())
 
-message("INFO: Loading pre-computed base data...")
+message("Loading pre-computed base data...")
 tryCatch({
-  # Define path relative to the script's expected location within the app directory.
-  # Assumes Dockerfile WORKDIR is /app and this script is at /app/plumber.R,
-  # with data copied to /app/data/.
   data_dir <- "data"
-  base_path <- getwd() # In container, this should be /app
-  message("INFO: Base path for data loading: ", base_path)
-  message("INFO: Relative data directory: ", data_dir)
+  message("Using relative path presumed from script location: ", data_dir)
+  normalized_base_path <- tryCatch(normalizePath(getwd(), mustWork = FALSE), error=function(e) getwd())
+  message("Attempting to load base data relative to CWD: ", normalized_base_path)
 
-  # Construct full paths
   sports_filtered_path <- file.path(data_dir, "precalc_sports_filtered.rds")
   trajectories_path <- file.path(data_dir, "precalc_player_trajectories.rds")
   clusters_path <- file.path(data_dir, "precalc_cluster_data.rds")
@@ -43,123 +36,100 @@ tryCatch({
   required_files <- c(sports_filtered_path, trajectories_path, clusters_path)
   files_exist <- file.exists(required_files)
 
-  # Critical check: Stop if essential data files are missing
   if(!all(files_exist)) {
     missing_files <- required_files[!files_exist]
-    abs_data_dir_path <- tryCatch(normalizePath(file.path(base_path, data_dir), mustWork = FALSE), error=function(e) file.path(base_path, data_dir))
+    normalized_data_dir_path <- tryCatch(normalizePath(file.path(normalized_base_path, data_dir), mustWork = FALSE), error=function(e) file.path(normalized_base_path, data_dir))
     stop(paste("CRITICAL ERROR: One or more pre-calculated data files not found:",
                paste(basename(missing_files), collapse=", "),
-               "\nExpected location relative to CWD:", abs_data_dir_path,
-               "\nCurrent working directory reported as:", base_path,
-               "\nPlease ensure files exist in the 'data' subdirectory within the deployment context."))
+               "\nExpected location relative to CWD:", normalized_data_dir_path,
+               "\nCurrent working directory reported as:", normalized_base_path))
   }
 
-  # Load data into the dedicated environment
   .API_ENV$SPORTS_FILTERED <- readRDS(sports_filtered_path)
   .API_ENV$PLAYER_TRAJECTORIES <- readRDS(trajectories_path)
   .API_ENV$CLUSTER_DATA <- readRDS(clusters_path)
 
-  # Basic validation of loaded data structure and content
   stopifnot(
-    "`SPORTS_FILTERED` must load as a non-empty data frame." = inherits(.API_ENV$SPORTS_FILTERED, "data.frame") && nrow(.API_ENV$SPORTS_FILTERED) > 0,
-    "`PLAYER_TRAJECTORIES` must load as a non-empty data frame." = inherits(.API_ENV$PLAYER_TRAJECTORIES, "data.frame") && nrow(.API_ENV$PLAYER_TRAJECTORIES) > 0,
-    "`CLUSTER_DATA` must load as a non-empty data frame." = inherits(.API_ENV$CLUSTER_DATA, "data.frame") && nrow(.API_ENV$CLUSTER_DATA) > 0
+    "`SPORTS_FILTERED` did not load as a non-empty data frame." = inherits(.API_ENV$SPORTS_FILTERED, "data.frame") && nrow(.API_ENV$SPORTS_FILTERED) > 0,
+    "`PLAYER_TRAJECTORIES` did not load as a non-empty data frame." = inherits(.API_ENV$PLAYER_TRAJECTORIES, "data.frame") && nrow(.API_ENV$PLAYER_TRAJECTORIES) > 0,
+    "`CLUSTER_DATA` did not load as a non-empty data frame." = inherits(.API_ENV$CLUSTER_DATA, "data.frame") && nrow(.API_ENV$CLUSTER_DATA) > 0
   )
-
-  message("INFO: Base data loaded and validated successfully.")
+  message("Base data loaded and validated successfully.")
 
 }, error = function(e) {
-  # Log critical error and store it for health checks
   message("CRITICAL ERROR during base data loading: ")
   message(conditionMessage(e))
   .API_ENV$LOAD_ERROR <- e
-  message("ERROR: API service will be impaired due to failure in loading base data. Check paths, file integrity, and pre-computation steps.")
-  # Note: The API will still start, but endpoints checking .API_ENV$LOAD_ERROR will fail.
+  message("API WILL LIKELY FAIL: Base data loading failed. Check logs, paths, and pre-computation script.")
 })
 
 
 # --- Plumber Filters ---
-# Filters run in order for each request before the endpoint handler.
 
-#* CORS handler - Essential for Browser-Based Clients (e.g., React)
-#* Configures Cross-Origin Resource Sharing headers.
+#* CORS handler - IMPORTANT FOR FRONTEND INTEGRATION
+#* Allows web applications (like your React app) hosted on specified domains
+#* to interact with this API.
 #* @filter cors
 function(req, res) {
-  # Production Best Practice: Control allowed origins via an environment variable.
-  # Set 'ALLOWED_ORIGIN' in your Azure Container App environment configuration.
-  # Example value: "https://your-react-app.com" (NO trailing slash)
-  # Default is for local development ONLY. For production, ensure the env var is set.
+  # Get allowed origin from Environment Variable (BEST PRACTICE FOR PROD)
+  # Set this variable in your Azure Container App configuration.
+  # Default to localhost:3000 for local development if variable not set.
   allowed_origin <- Sys.getenv("ALLOWED_ORIGIN", "http://localhost:3000")
-  if (allowed_origin == "http://localhost:3000" && Sys.getenv("R_ENV", "development") == "production") {
-    message("WARN: ALLOWED_ORIGIN environment variable not set in production environment, defaulting to localhost:3000. This is likely incorrect for production use.")
-  }
 
-  # Always set the Allow-Origin header for the configured origin.
+  # Set the Access-Control-Allow-Origin header for all responses
   res$setHeader("Access-Control-Allow-Origin", allowed_origin)
 
-  # Handle browser "preflight" OPTIONS requests.
+  # Handle preflight (OPTIONS) requests, often sent by browsers before POST/PUT etc.
   if (req$REQUEST_METHOD == "OPTIONS") {
-    # Specify allowed HTTP methods and headers for requests from the allowed origin.
-    res$setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS") # Adjust if needed
-    res$setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization") # Add others if needed (e.g., custom headers)
-    # Optional: Allow credentials (cookies, auth tokens). Only use if origin isn't "*".
+    # Specify allowed methods and headers for cross-origin requests
+    res$setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS") # Adjust if you add PUT/DELETE etc.
+    res$setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization") # Add 'Authorization' if you use tokens
+    # Optional: Allow credentials (like cookies, auth headers). Only use if origin != "*"
     # res$setHeader("Access-Control-Allow-Credentials", "true")
-    # Optional: Cache preflight response (seconds). Reduces OPTIONS requests.
+    # Optional: Define how long preflight response can be cached (in seconds)
     # res$setHeader("Access-Control-Max-Age", "86400") # 24 hours
 
-    res$status <- 204 # 204 No Content is common for OPTIONS success
-    # Return empty body immediately - do not forward OPTIONS requests further.
+    res$status <- 200 # OK status for preflight
+    # Return empty body immediately for OPTIONS - DO NOT FORWARD
     return(list())
   } else {
-    # For non-OPTIONS requests (GET, POST, etc.), pass control to the next filter or endpoint.
+    # For actual requests (GET, POST, etc.), forward to the next handler/endpoint
     plumber::forward()
   }
 }
 
-#* Request Logger
-#* Logs basic details about incoming requests and their responses.
+#* Log incoming requests
 #* @filter logger
-function(req, res){ # Ensure 'res' is available if needed for response logging later
+function(req){
   start_time <- Sys.time()
-  # Log request details
-  cat(format(start_time), "- REQ:", req$REQUEST_METHOD, req$PATH_INFO, "-",
-      "FROM:", req$REMOTE_ADDR %||% "Unknown", "-",
-      "AGENT:", substr(req$HTTP_USER_AGENT %||% "Unknown", 1, 50), # Limit agent length
-      "\n")
+  cat(format(start_time), "-", req$REQUEST_METHOD, req$PATH_INFO, "-", req$HTTP_USER_AGENT %||% "Unknown", "@", req$REMOTE_ADDR %||% "Unknown", "\n")
 
-  # Pass control down the chain (to other filters or the endpoint)
-  plumber::forward()
+  plumber::forward() # Pass control to the next filter or endpoint
 
-  # Code here runs *after* the endpoint handler finishes
   end_time <- Sys.time()
   duration <- round(as.numeric(difftime(end_time, start_time, units = "secs")), 3)
-  # Safely get status code from the response object
-  status_code <- tryCatch(res$status, error = function(e) NULL) %||% 200 # Default to 200 if unset
-
-  # Log response details
-  cat(format(end_time), "- RES:", req$REQUEST_METHOD, req$PATH_INFO, "-",
-      "STATUS:", status_code, "-",
-      "DURATION:", duration, "s\n")
+  # Attempt to get status from response object, default to 200 if not set yet
+  status_code <- tryCatch(req$pr$res$status, error = function(e) NULL) %||% 200
+  cat(format(end_time), "-", req$REQUEST_METHOD, req$PATH_INFO, "- Status:", status_code, "- Duration:", duration, "s\n")
 }
 
 # --- API Endpoints ---
 
 #* Recalculate Primes, PQI, CQI based on thresholds
-#* Expects a JSON body with optional 'thresholdPct' and 'gamesPctThreshold'.
-#* @param req The plumber request object
-#* @param res The plumber response object
+#* @param req The request object
+#* @param res The response object
 #* @post /recalculate
-#* @serializer contentType list(type="application/json") # Specify response type (manual serialization below)
+#* @serializer contentType list(type="application/json") # Manual serialization below
 function(req, res) {
   endpoint_start_time <- Sys.time()
-  message("INFO: /recalculate endpoint invoked.")
+  message("API: /recalculate endpoint invoked.")
 
   # --- Initial Health Check ---
   if (exists("LOAD_ERROR", envir = .API_ENV)) {
     res$status <- 503 # Service Unavailable
     err_msg <- paste("Service Unavailable: Critical base data failed to load during API startup. Check server logs. Original error:",
                      conditionMessage(.API_ENV$LOAD_ERROR))
-    message("ERROR: /recalculate cannot proceed due to data load failure.")
+    message("API Error: /recalculate cannot proceed due to data load failure.")
     res$body <- jsonlite::toJSON(list(success = FALSE, message = err_msg, parameters = list()), auto_unbox = TRUE, na = "null")
     return(res)
   }
@@ -217,7 +187,7 @@ function(req, res) {
     message("INFO: Calculation Step 0: Base data retrieved.")
 
     # --- Step 1: Prime Identification ---
-    message("INFO: Calculation Step 1: Identifying Primes...")
+    message("INFO: Calculation Step 1: Identifying Primes...!")
     spline_join_data <- base_sports_data %>% select(id, league, position, age, games_played) %>% distinct(id, age, .keep_all = TRUE)
     spline_input_data <- base_trajectory_data %>% left_join(spline_join_data, by = c("id", "age"))
     stopifnot("Data prep for spline input failed." = is.data.frame(spline_input_data))
@@ -373,98 +343,78 @@ function(req, res) {
   # Set response body and return the response object
   res$body <- response_body
   return(res)
-}
-
+} # End /recalculate endpoint
 
 #* API Status / Health Check
-#* Provides basic status information about the API.
 #* @get /
 #* @serializer contentType list(type="application/json") # Manual serialization
 function(req, res){
-  message("INFO: / (health check) endpoint invoked.")
+  message("API: / (health check) endpoint invoked.")
   response_list <- list()
 
-  # Check 1: Was there a critical error during initial data loading?
+  # Check for the initial load error first
   if (exists("LOAD_ERROR", envir = .API_ENV)) {
     res$status <- 503 # Service Unavailable
     response_list <- list(
-      status = "ERROR",
-      message = paste("API is running BUT critical base data failed to load during startup. Service is impaired. Check server logs. Startup Error:",
+      status = "Error",
+      message = paste("API is running BUT critical base data failed to load during startup. Service is impaired. Check server logs. Error:",
                       conditionMessage(.API_ENV$LOAD_ERROR)),
-      data_loaded = FALSE,
-      timestamp = Sys.time()
+      data_loaded = FALSE
     )
-    message("ERROR: Health Check Failed (Startup Data Load Error).")
   } else {
-    # Check 2: Verify essential data objects exist and seem valid *now*.
-    data_check_passed <- tryCatch({
+    # Check if data objects exist and are valid within the environment
+    data_check <- tryCatch({
       stopifnot(
-        exists("SPORTS_FILTERED", envir = .API_ENV) && inherits(.API_ENV$SPORTS_FILTERED, "data.frame") && nrow(.API_ENV$SPORTS_FILTERED) > 0,
-        exists("PLAYER_TRAJECTORIES", envir = .API_ENV) && inherits(.API_ENV$PLAYER_TRAJECTORIES, "data.frame") && nrow(.API_ENV$PLAYER_TRAJECTORIES) > 0,
-        exists("CLUSTER_DATA", envir = .API_ENV) && inherits(.API_ENV$CLUSTER_DATA, "data.frame") && nrow(.API_ENV$CLUSTER_DATA) > 0
+        "SPORTS_FILTERED missing or not a data frame" = exists("SPORTS_FILTERED", envir = .API_ENV) && inherits(.API_ENV$SPORTS_FILTERED, "data.frame") && nrow(.API_ENV$SPORTS_FILTERED) > 0,
+        "PLAYER_TRAJECTORIES missing or not a data frame" = exists("PLAYER_TRAJECTORIES", envir = .API_ENV) && inherits(.API_ENV$PLAYER_TRAJECTORIES, "data.frame") && nrow(.API_ENV$PLAYER_TRAJECTORIES) > 0,
+        "CLUSTER_DATA missing or not a data frame" = exists("CLUSTER_DATA", envir = .API_ENV) && inherits(.API_ENV$CLUSTER_DATA, "data.frame") && nrow(.API_ENV$CLUSTER_DATA) > 0
       )
-      TRUE # All checks passed
+      TRUE # Return TRUE if all checks pass
     }, error = function(e) {
-      message("WARN: Health Check - Runtime data validation failed: ", conditionMessage(e))
-      FALSE # A check failed
+      message("API Health Check Warning: Data validation failed. ", conditionMessage(e))
+      FALSE # Return FALSE if any check fails
     })
 
-    if (data_check_passed) {
+    if (data_check) {
       res$status <- 200 # OK
       response_list <- list(
         status = "OK",
-        message = "API is running and essential base data appears valid.",
+        message = "API is running and base data is loaded and validated.",
         data_loaded = TRUE,
-        timestamp = Sys.time(),
         endpoints = list(
           status = list(method = "GET", path = "/", description = "API health check."),
           recalculate = list(method = "POST", path = "/recalculate", description = "Recalculates metrics based on thresholds (thresholdPct, gamesPctThreshold).")
         )
       )
-      message("INFO: Health Check OK!")
+      message("API Health Check: OK.")
     } else {
-      res$status <- 503 # Service Unavailable (Essential data missing/invalid at runtime)
+      res$status <- 503 # Service Unavailable (data is essential)
       response_list <- list(
-        status = "ERROR",
-        message = "API is running BUT essential base data is missing, invalid, or empty at runtime. Service is impaired. Check server logs.",
-        data_loaded = FALSE,
-        timestamp = Sys.time()
+        status = "Error",
+        message = "API is running BUT base data is missing, invalid, or empty. Service is impaired. Check server logs.",
+        data_loaded = FALSE
       )
-      message("ERROR: Health Check Failed (Runtime Data Invalid/Missing).")
+      message("API Health Check: Failed (Data Invalid/Missing).")
     }
   }
 
-  # Serialize response and return
+  # Manually serialize the list to JSON
   res$body <- jsonlite::toJSON(response_list, auto_unbox = TRUE, na = "null", pretty = FALSE)
-  message("INFO: / (health check) completed.")
+  message("API: / (health check) completed.")
   return(res)
-}
+} # End / endpoint
 
-# --- Plumber Entrypoint Definition ---
-# Defines this script as a Plumber API source. Used by plumber::plumb().
+# --- Plumber Entrypoint (If running directly, not via app.R/Shiny) ---
+# This section is typically used when the Dockerfile directly runs this script.
+# It might be commented out if using a different entrypoint mechanism.
 #* @plumber
 function(pr) {
-  # Optional: Add global error handlers or other router-level configurations here
-  # pr$setErrorHandler(function(req, res, err){ ... })
-  message("INFO: Plumber router object created.")
-  pr # Return the router object
+  pr # Return the plumber router object
 }
 
-# --- Notes for Production Deployment (e.g., Azure Container Apps via Docker) ---
-# 1. Dependencies: Use 'renv' to manage and lock R package versions (`renv::snapshot()`).
-#    Ensure 'renv.lock' is committed and used during Docker build (e.g., `renv::restore()`).
-# 2. Configuration: Set environment variables in Azure Container Apps for:
-#    - `ALLOWED_ORIGIN`: URL of your frontend (e.g., "https://your-react-app.com")
-#    - `R_ENV`: Set to "production" (optional, can help control behavior/logging)
-#    - Any other external service credentials or settings.
-# 3. Dockerfile CMD: Use the JSON format for CMD for proper signal handling:
-#    `CMD ["R", "-e", "api <- plumber::plumb('plumber.R'); api$run(host='0.0.0.0', port=8000)"]`
-#    (Adjust port as needed, ensure it matches EXPOSE and Azure Container App config).
-# 4. Data Files: Ensure the `data/` directory is correctly copied into the Docker image
-#    relative to `plumber.R` and the WORKDIR (e.g., `COPY data/ /app/data/`).
-# 5. HTTPS: Handled by Azure Container Apps ingress; the R process listens on HTTP internally.
-# 6. Logging: Configure Azure Container Apps to collect logs (stdout/stderr). Consider
-#    structured logging (JSON format) for easier parsing in tools like Log Analytics.
-# 7. Authentication/Authorization: This API is currently open. Implement appropriate security
-#    (API keys, tokens via Authorization header, etc.) if the data or operations are sensitive.
-#    This would likely involve adding another Plumber filter.
+# --- Note on app.R ---
+# The app.R file provided previously wraps this Plumber API in a Shiny app.
+# For deployment to Azure Container Apps using Docker, you typically DON'T need app.R.
+# Your Dockerfile should directly run the Plumber API using a command like:
+# CMD ["R", "-e", "pr <- plumber::plumb('plumber.R'); pr$run(host='0.0.0.0', port=8000)"]
+# Running via Shiny (app.R) is common for shinyapps.io, not typically needed for ACA.
