@@ -1,0 +1,12 @@
+.git
+.github
+docs
+man
+tests
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+\*.Rproj
+README.md
+.gitignore
