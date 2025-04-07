@@ -31,7 +31,7 @@ WORKDIR /app
 COPY . /app/
 
 # Expose the port
-EXPOSE 8080
+EXPOSE 80
 
 # Add debug info to help troubleshoot
 RUN echo "API files in /app:" && ls -la /app && echo "Files in subdirectories:" && find /app -type f -name "*.R" | sort
@@ -61,7 +61,7 @@ else\n\
 fi\n\
 \n\
 echo "Starting API with: $PLUMBER_PATH"\n\
-R -e "options(warn=2); Sys.setenv(R_CONFIG_ACTIVE=\"production\"); message(\"Starting Plumber API...\"); pr <- plumber::plumb(\"$PLUMBER_PATH\"); pr\$run(host=\"0.0.0.0\", port=8080)"\n\
+R -e "options(warn=2); Sys.setenv(R_CONFIG_ACTIVE=\"production\"); message(\"Starting Plumber API...\"); pr <- plumber::plumb(\"$PLUMBER_PATH\"); pr\$run(host=\"0.0.0.0\", port=80)"\n\
 ' > /app/start.sh
 
 RUN chmod +x /app/start.sh
