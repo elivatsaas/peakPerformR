@@ -50,5 +50,5 @@ RUN echo "--- Installing GitHub package peakPerformR ---" && \
 # --- Verify and setup ---
 RUN mkdir -p ./data && chmod +x /app/start.sh
 # --- Expose Port and Run ---
-EXPOSE 80
+EXPOSE 8080
 CMD ["/app/start.sh"]
