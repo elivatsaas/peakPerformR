@@ -39,15 +39,12 @@ COPY . /app/
 # --- Install peakPerformR with debugging ---
 RUN echo "--- Installing GitHub package peakPerformR (forcing) ---" && \
     R -e "options(warn=1); \
-          # First download the package without installing \
           temp_dir <- tempdir(); \
           download_path <- file.path(temp_dir, 'peakPerformR.tar.gz'); \
           remotes::install_github('elivatsaas/peakPerformR', dependencies = FALSE, build = TRUE, build_opts = c('--no-build-vignettes'), upgrade = 'never'); \
-          # Check if we have devtools, if not install it \
           if(!requireNamespace('devtools', quietly = TRUE)) { \
             install.packages('devtools', repos='https://cloud.r-project.org/'); \
           } \
-          # Try forcing with devtools \
           devtools::install_github('elivatsaas/peakPerformR', dependencies = FALSE, upgrade = 'never', force = TRUE);"
 # --- Verify Plumber File ---
 RUN echo "--- Checking plumber.R file ---" && \
