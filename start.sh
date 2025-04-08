@@ -1,7 +1,7 @@
 #!/bin/bash
+set -x  # Print commands as they're executed (for debugging)
 echo "--- Running start.sh ---"
 echo "Working Directory: $(pwd)" # Should be /app inside the container
-
 PLUMBER_FILE="plumber.R"
 EXPECTED_PATH="/app/plumber/plumber.R" # Specific path you mentioned
 ROOT_PATH="/app/plumber.R"
@@ -9,10 +9,12 @@ ROOT_PATH="/app/plumber.R"
 # Check explicit path first
 if [ -f "${EXPECTED_PATH}" ]; then
   PLUMBER_PATH="${EXPECTED_PATH}"
+  PLUMBER_DIR="/app/plumber"
   echo "Found plumber script at expected path: ${PLUMBER_PATH}"
 # Then check root path
 elif [ -f "${ROOT_PATH}" ]; then
   PLUMBER_PATH="${ROOT_PATH}"
+  PLUMBER_DIR="/app"
   echo "Found plumber script at root path: ${PLUMBER_PATH}"
 else
   # If not found in expected places, search within /app using find
@@ -20,6 +22,7 @@ else
   FOUND_PATH=$(find /app -name "${PLUMBER_FILE}" -print -quit)
   if [ -n "${FOUND_PATH}" ]; then
       PLUMBER_PATH="${FOUND_PATH}"
+      PLUMBER_DIR=$(dirname "${FOUND_PATH}")
       echo "Found ${PLUMBER_FILE} via find at: ${PLUMBER_PATH}"
   else
       # Critical error if plumber.R is not found anywhere
@@ -42,6 +45,10 @@ echo "Data directory /app/data ensured."
 LISTEN_PORT=80
 echo "Starting API using R script: ${PLUMBER_PATH} on host 0.0.0.0, port ${LISTEN_PORT}"
 
+# Change to the directory containing plumber.R to ensure relative paths work correctly
+cd "${PLUMBER_DIR}"
+echo "Changed working directory to: $(pwd)"
+
 # Execute Plumber API, listening on all interfaces (0.0.0.0) on port 80
-# Added options(warn=2) to treat warnings as errors for stricter checking during startup.
-exec R -e "options(warn=2); pr <- plumber::plumb(file='${PLUMBER_PATH}'); pr[['run']](host='0.0.0.0', port=${LISTEN_PORT})"
+# Using local filename now that we've changed directory
+exec R -e "options(warn=2); pr <- plumber::plumb(file='${PLUMBER_FILE}'); pr[['run']](host='0.0.0.0', port=${LISTEN_PORT})"
