@@ -44,4 +44,4 @@ echo "Starting API using R script: ${PLUMBER_PATH} on host 0.0.0.0, port ${LISTE
 
 # Execute Plumber API, listening on all interfaces (0.0.0.0) on port 80
 # Added options(warn=2) to treat warnings as errors for stricter checking during startup.
-exec R -e "options(warn=2); pr <- plumber::plumb(file='${PLUMBER_PATH}'); pr\\$run(host='0.0.0.0', port=${LISTEN_PORT})"
+exec R -e "options(warn=2); pr <- plumber::plumb(file='${PLUMBER_PATH}'); pr[['run']](host='0.0.0.0', port=${LISTEN_PORT})"
