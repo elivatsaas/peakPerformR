@@ -1,13 +1,11 @@
-# Dockerfile without renv - Fixing Rprofile issue and adding libsodium-dev
-
-# Use R 4.3.1 as in the log, but consider 4.4.1 if further issues arise
+# Dockerfile 
 FROM rocker/r-ver:4.3.1
 
 # Set DEBIAN_FRONTEND to noninteractive
 ENV DEBIAN_FRONTEND=noninteractive
 
 # --- Install System Dependencies ---
-# Added git AND libsodium-dev
+# Added git, libsodium-dev AND libz-dev
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libssl-dev \
@@ -15,10 +13,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxml2-dev \
     git \
     libsodium-dev `# <--- Added for sodium package` \
+    libz-dev `# <--- Added for httpuv/plumber dependency` \
  && apt-get clean && rm -rf /var/lib/apt/lists/*
-
+ 
 # --- Install R Packages Directly ---
-# *CRITICAL*: This step MUST succeed now. Check build logs carefully.
 RUN echo "--- Installing REQUIRED CRAN dependencies (excluding baseballr) ---" && \
     R -e "install.packages(c( \
     'plumber', \
@@ -31,30 +29,20 @@ RUN echo "--- Installing REQUIRED CRAN dependencies (excluding baseballr) ---" &
     'lubridate', \
     'httr', \
     'jsonlite', \
-    # 'baseballr', # Skipped
-    'fastRhockey', \
-    'hoopR', \
-    'itscalledsoccer', \
     'magrittr', \
-    'nflreadr', \
-    'wehoop', \
     'rlang', \
     'tibble', \
     'sodium', \
     'httpuv'  \
     ), repos='https://cloud.r-project.org/', Ncpus = 2)"
-
 # --- Configure Application ---
 WORKDIR /app
 # Ensure the .Rprofile being copied no longer sources renv/activate.R
 COPY . /app/
-
 # --- Install Your GitHub Package (Skipping its Dependencies) ---
 # This should now run without the Rprofile error
 RUN echo "--- Installing GitHub package peakPerformR (dependencies=FALSE) ---" && \
     R -e "remotes::install_github('elivatsaas/peakPerformR', dependencies = FALSE)"
-
-
 # --- Verify Copied Application Files ---
 RUN echo "--- Files in /app after COPY ---" && ls -lha /app && echo "--- Files in /app/plumber ---" && ls -lha /app/plumber || echo "/app/plumber not found or empty"
 # Ensure the data directory exists (safer after COPY)
