@@ -42,13 +42,13 @@ echo "Data directory /app/data ensured."
 
 # --- PORT CORRECTION ---
 # Listen on port 80 to match the Docker EXPOSE directive and the Azure Target Port.
-LISTEN_PORT=80
+LISTEN_PORT=8080
 echo "Starting API using R script: ${PLUMBER_PATH} on host 0.0.0.0, port ${LISTEN_PORT}"
 
 # Change to the directory containing plumber.R to ensure relative paths work correctly
 cd "${PLUMBER_DIR}"
 echo "Changed working directory to: $(pwd)"
 
-# Execute Plumber API, listening on all interfaces (0.0.0.0) on port 80
+# Execute Plumber API, listening on all interfaces (0.0.0.0) on port 8080
 # Using local filename now that we've changed directory
 exec R -e "options(warn=2); pr <- plumber::plumb(file='${PLUMBER_FILE}'); pr[['run']](host='0.0.0.0', port=${LISTEN_PORT})"
