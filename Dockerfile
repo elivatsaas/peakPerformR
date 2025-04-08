@@ -37,21 +37,18 @@ WORKDIR /app
 # Copy files
 COPY . /app/
 # --- Install peakPerformR with debugging ---
-RUN echo "--- Installing GitHub package peakPerformR ---" && \
-    R -e "message('R library paths:'); \
-          print(.libPaths()); \
-          message('Installing from GitHub...'); \
-          remotes::install_github('elivatsaas/peakPerformR', dependencies = FALSE); \
-          message('Installation completed'); \
-          installed <- installed.packages(); \
-          if('peakPerformR' %in% rownames(installed)) { \
-            message('Package installed at: ', find.package('peakPerformR')); \
-          } else { \
-            message('Package NOT in installed.packages()!'); \
-            all_pkgs <- list.files(.libPaths(), recursive = FALSE); \
-            message('All packages in library: '); \
-            print(all_pkgs); \
-          }"
+RUN echo "--- Installing GitHub package peakPerformR (forcing) ---" && \
+    R -e "options(warn=1); \
+          # First download the package without installing \
+          temp_dir <- tempdir(); \
+          download_path <- file.path(temp_dir, 'peakPerformR.tar.gz'); \
+          remotes::install_github('elivatsaas/peakPerformR', dependencies = FALSE, build = TRUE, build_opts = c('--no-build-vignettes'), upgrade = 'never'); \
+          # Check if we have devtools, if not install it \
+          if(!requireNamespace('devtools', quietly = TRUE)) { \
+            install.packages('devtools', repos='https://cloud.r-project.org/'); \
+          } \
+          # Try forcing with devtools \
+          devtools::install_github('elivatsaas/peakPerformR', dependencies = FALSE, upgrade = 'never', force = TRUE);"
 # --- Verify Plumber File ---
 RUN echo "--- Checking plumber.R file ---" && \
     cat /app/plumber/plumber.R | head -10
