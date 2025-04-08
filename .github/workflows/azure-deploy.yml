@@ -37,14 +37,13 @@ jobs:
           echo "Registry ping:"
           timeout 10 docker info || true
 
-      # --- CHANGE 1: Modify tags to include Git SHA ---
+      # Tag with both latest and Git SHA
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
         with:
           context: .
           file: ./Dockerfile
           push: true
-          # Add the Git SHA tag alongside latest
           tags: |
             ${{ secrets.DOCKER_HUB_USERNAME }}/peakperformr-api:latest
             ${{ secrets.DOCKER_HUB_USERNAME }}/peakperformr-api:${{ github.sha }}
@@ -69,7 +68,7 @@ jobs:
           echo "Listing resource groups..."
           az group list --query "[].name" -o tsv
 
-      # --- CHANGE 2: Use unique Git SHA tag in update command ---
+      # Use unique Git SHA tag in update command - COMMENT REMOVED
       - name: Update Container App
         uses: azure/CLI@v1
         with:
@@ -85,6 +84,6 @@ jobs:
             az containerapp update \
               --name ${{ secrets.PEAKPERFORMRAPI_CONTAINER_APP_NAME }} \
               --resource-group ${{ secrets.PEAKPERFORMRAPI_RESOURCE_GROUP }} \
-              --image ${{ secrets.DOCKER_HUB_USERNAME }}/peakperformr-api:${{ github.sha }} \ # Use the unique tag here
+              --image ${{ secrets.DOCKER_HUB_USERNAME }}/peakperformr-api:${{ github.sha }} \
               --set-env-vars "ALLOWED_ORIGIN=${{ secrets.PEAKPERFORMRAPI_ALLOWED_ORIGIN }}" "R_CONFIG_ACTIVE=production" \
               --debug
