@@ -11,9 +11,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     libsodium-dev \
     libz-dev \
+    pkg-config \
  && apt-get clean && rm -rf /var/lib/apt/lists/*
-# --- Install R Packages Directly ---
-RUN echo "--- Installing REQUIRED CRAN dependencies (excluding baseballr) ---" && \
+# --- Install ALL R Packages Directly (including ALL sports packages) ---
+RUN echo "--- Installing ALL required CRAN dependencies ---" && \
     R -e "install.packages(c( \
     'plumber', \
     'remotes', \
@@ -26,30 +27,27 @@ RUN echo "--- Installing REQUIRED CRAN dependencies (excluding baseballr) ---" &
     'httr', \
     'jsonlite', \
     'readr', \
+    'baseballr', \
+    'fastRhockey', \
+    'hoopR', \
+    'itscalledsoccer', \
     'magrittr', \
+    'nflreadr', \
+    'wehoop', \
     'rlang', \
     'tibble', \
     'sodium', \
-    'httpuv'  \
+    'httpuv', \
+    'devtools' \
     ), repos='https://cloud.r-project.org/', Ncpus = 2)"
 # --- Configure Application ---
 WORKDIR /app
 # Copy files
 COPY . /app/
-# --- Install peakPerformR with debugging ---
-RUN echo "--- Installing GitHub package peakPerformR (forcing) ---" && \
-    R -e "options(warn=1); \
-          temp_dir <- tempdir(); \
-          download_path <- file.path(temp_dir, 'peakPerformR.tar.gz'); \
-          remotes::install_github('elivatsaas/peakPerformR', dependencies = FALSE, build = TRUE, build_opts = c('--no-build-vignettes'), upgrade = 'never'); \
-          if(!requireNamespace('devtools', quietly = TRUE)) { \
-            install.packages('devtools', repos='https://cloud.r-project.org/'); \
-          } \
-          devtools::install_github('elivatsaas/peakPerformR', dependencies = FALSE, upgrade = 'never', force = TRUE);"
-# --- Verify Plumber File ---
-RUN echo "--- Checking plumber.R file ---" && \
-    cat /app/plumber/plumber.R | head -10
-# --- Setup Startup Script ---
+# Install GitHub package (simple version)
+RUN echo "--- Installing GitHub package peakPerformR ---" && \
+    R -e "remotes::install_github('elivatsaas/peakPerformR', dependencies = FALSE)"
+# --- Verify and setup ---
 RUN mkdir -p ./data && chmod +x /app/start.sh
 # --- Expose Port and Run ---
 EXPOSE 80
