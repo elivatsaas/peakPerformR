@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN echo "--- Installing REQUIRED CRAN dependencies (excluding baseballr) ---" && \
     R -e "install.packages(c( \
     'plumber', \
+    'readr', \
     'remotes', \
     'dplyr', \
     'purrr', \
