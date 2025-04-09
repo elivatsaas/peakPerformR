@@ -189,16 +189,16 @@ function(req, res) {
     temp_processed_data <- peakPerformR::process_player_primes(temp_player_data, base_sports_data)
     stopifnot("Process player primes failed." = is.data.frame(temp_processed_data))
 
-    # Update 'in_prime' flag using RAW primes for the full dataset output
+    # Update 'in_prime' flag using Spline primes for the full dataset output
     updated_full_data_df <- base_sports_data # Start fresh
-    if (nrow(new_raw_primes_df) > 0 && all(c("id", "start_age", "end_age") %in% names(new_raw_primes_df))) {
-      primes_to_join <- new_raw_primes_df %>% select(id, prime_start_age = start_age, prime_end_age = end_age) %>% distinct(id, .keep_all = TRUE)
+    if (nrow(new_spline_primes_df) > 0 && all(c("id", "start_age", "end_age") %in% names(new_spline_primes_df))) {
+      primes_to_join <- new_spline_primes_df %>% select(id, prime_start_age = start_age, prime_end_age = end_age) %>% distinct(id, .keep_all = TRUE)
       updated_full_data_df <- updated_full_data_df %>%
         left_join(primes_to_join, by = "id") %>%
         mutate(in_prime = !is.na(prime_start_age) & !is.na(prime_end_age) & !is.na(age) & age >= prime_start_age & age <= prime_end_age) %>%
         select(-prime_start_age, -prime_end_age)
     } else {
-      message("WARN: Raw primes data empty or missing columns. Setting 'in_prime' to FALSE for all in fullData.")
+      message("WARN: Spline primes data empty or missing columns. Setting 'in_prime' to FALSE for all in fullData.")
       updated_full_data_df <- updated_full_data_df %>% mutate(in_prime = FALSE)
     }
     stopifnot("Updating 'in_prime' flag failed." = is.data.frame(updated_full_data_df))
