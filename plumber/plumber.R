@@ -7,6 +7,7 @@ suppressPackageStartupMessages({
   library(readr)
   library(purrr)
   library(peakPerformR) # Your custom package
+  library(rlang)      # Needed for trace_back and :=
 })
 message("Required packages loaded. Custom package 'peakPerformR' loaded.")
 
@@ -66,7 +67,7 @@ tryCatch({
 #* @filter cors
 function(req, res) {
   # Get allowed origin from Environment Variable
-  allowed_origin <- Sys.getenv("ALLOWED_ORIGIN", "http://localhost:3000")
+  allowed_origin <- Sys.getenv("ALLOWED_ORIGIN", "http://localhost:3000") # Default to localhost:3000 if not set
 
   # Set CORS headers
   res$setHeader("Access-Control-Allow-Origin", allowed_origin)
@@ -74,11 +75,11 @@ function(req, res) {
   # Handle preflight (OPTIONS) requests
   if (req$REQUEST_METHOD == "OPTIONS") {
     res$setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-    res$setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization")
+    res$setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization") # Adjust headers as needed by your app
     res$status <- 200
-    return(list())
+    return(list()) # Respond to OPTIONS request immediately
   } else {
-    plumber::forward()
+    plumber::forward() # Continue processing for non-OPTIONS requests
   }
 }
 
@@ -92,7 +93,8 @@ function(req){
 
   end_time <- Sys.time()
   duration <- round(as.numeric(difftime(end_time, start_time, units = "secs")), 3)
-  status_code <- tryCatch(req$pr$res$status, error = function(e) NULL) %||% 200
+  # Safely get status code, default to 500 if unavailable (indicates early exit/error)
+  status_code <- tryCatch(req$pr$res$status, error = function(e) NULL) %||% 500
   cat(format(end_time), "-", req$REQUEST_METHOD, req$PATH_INFO, "- Status:", status_code, "- Duration:", duration, "s\n")
 }
 
@@ -189,48 +191,82 @@ function(req, res) {
     temp_processed_data <- peakPerformR::process_player_primes(temp_player_data, base_sports_data)
     stopifnot("Process player primes failed." = is.data.frame(temp_processed_data))
 
-    # Update 'in_prime' flag using Spline primes for the full dataset output
-   # --- Update 'in_prime' AND 'is_peak_age' flags using Spline primes ---
-    message("INFO: Updating 'in_prime' and 'is_peak_age' flags in fullData...")
+    # --- Update 'fullData' - Ensure required columns and calculate flags ---
+    message("INFO: Updating flags and ensuring required columns in fullData...")
     updated_full_data_df <- base_sports_data # Start with the original full data
 
-    if (nrow(new_spline_primes_df) > 0 &&
-        all(c("id", "start_age", "end_age", "max_value_age") %in% names(new_spline_primes_df))) { # Check max_value_age exists
+    # --- Ensure 'scaled_value' exists ---
+    required_value_col <- "scaled_value" # Expected name by frontend
+    if (!required_value_col %in% names(updated_full_data_df)) {
+      potential_value_col <- "value" # Adjust if your base column name is different
+      if (potential_value_col %in% names(updated_full_data_df)) {
+        message(sprintf("WARN: Column '%s' not found. Renaming '%s' to '%s'.",
+                        required_value_col, potential_value_col, required_value_col))
+        updated_full_data_df <- updated_full_data_df %>%
+          rename({{required_value_col}} := {{potential_value_col}}) # Use dynamic renaming
+      } else {
+         message(sprintf("ERROR: Required column '%s' (or alternative '%s') not found in base_sports_data! Adding dummy NA column.", required_value_col, potential_value_col))
+         # This usually indicates an issue in the upstream data preparation (RDS generation)
+         updated_full_data_df[[required_value_col]] <- NA_real_ # Add dummy column
+      }
+    }
+    # --- End 'scaled_value' check ---
 
-      # Prepare distinct prime start/end and peak ages for joining
+    # --- Calculate flags based on new spline primes ---
+    if (nrow(new_spline_primes_df) > 0 &&
+        all(c("id", "start_age", "end_age", "max_value_age") %in% names(new_spline_primes_df))) {
+
       primes_info_to_join <- new_spline_primes_df %>%
         select(id, prime_start_age = start_age, prime_end_age = end_age, prime_peak_age = max_value_age) %>%
-        distinct(id, .keep_all = TRUE) # Ensure one row per player
+        distinct(id, .keep_all = TRUE)
 
       updated_full_data_df <- updated_full_data_df %>%
         left_join(primes_info_to_join, by = "id") %>%
         mutate(
-          # Calculate in_prime based on joined spline start/end ages
           in_prime = !is.na(prime_start_age) & !is.na(prime_end_age) & !is.na(age) &
                        age >= prime_start_age & age <= prime_end_age,
-
-          # Calculate is_peak_age based on joined spline peak age
           is_peak_age = !is.na(prime_peak_age) & !is.na(age) &
-                         age == prime_peak_age
+                         age == prime_peak_age,
+          years_from_peak = if_else(!is.na(age) & !is.na(prime_peak_age) & is.numeric(age) & is.numeric(prime_peak_age),
+                                    as.integer(round(age - prime_peak_age)),
+                                    NA_integer_)
         ) %>%
-        select(-prime_start_age, -prime_end_age, -prime_peak_age) # Clean up temporary join columns
+        select(-prime_start_age, -prime_end_age, -prime_peak_age) # Clean up
 
-        message(sprintf("INFO: -> Full data flags updated (in_prime: %d T / %d F, is_peak_age: %d T / %d F)",
-                        sum(updated_full_data_df$in_prime, na.rm=TRUE), sum(!updated_full_data_df$in_prime, na.rm=TRUE),
-                        sum(updated_full_data_df$is_peak_age, na.rm=TRUE), sum(!updated_full_data_df$is_peak_age, na.rm=TRUE)))
+      message(sprintf("INFO: -> Full data flags calculated based on new primes (in_prime: %d T / %d F, is_peak_age: %d T / %d F, years_from_peak calculated)",
+                      sum(updated_full_data_df$in_prime, na.rm=TRUE), sum(!updated_full_data_df$in_prime, na.rm=TRUE),
+                      sum(updated_full_data_df$is_peak_age, na.rm=TRUE), sum(!updated_full_data_df$is_peak_age, na.rm=TRUE)))
 
     } else {
-      message("WARN: Spline primes data empty or missing required columns (id, start_age, end_age, max_value_age). Setting 'in_prime' and 'is_peak_age' to FALSE for all in fullData.")
-      updated_full_data_df <- updated_full_data_df %>%
-        mutate(in_prime = FALSE, is_peak_age = FALSE) # Ensure both flags are added even if FALSE
+      message("WARN: Spline primes data empty or missing required columns. Setting flags to FALSE/NA in fullData.")
+      # Ensure flag columns exist even if primes are missing
+      if (!"in_prime" %in% names(updated_full_data_df)) updated_full_data_df$in_prime <- FALSE
+      else updated_full_data_df$in_prime <- FALSE
+
+      if (!"is_peak_age" %in% names(updated_full_data_df)) updated_full_data_df$is_peak_age <- FALSE
+      else updated_full_data_df$is_peak_age <- FALSE
+
+      if (!"years_from_peak" %in% names(updated_full_data_df)) updated_full_data_df$years_from_peak <- NA_integer_
+      else updated_full_data_df$years_from_peak <- NA_integer_
     }
-    stopifnot("Updating 'in_prime' and 'is_peak_age' flags failed." = is.data.frame(updated_full_data_df) && all(c("in_prime", "is_peak_age") %in% names(updated_full_data_df)))
-    
-    message(sprintf("INFO: -> Performance data processed, full data 'in_prime' flag updated (%d T / %d F)",
-                    sum(updated_full_data_df$in_prime, na.rm=TRUE), sum(!updated_full_data_df$in_prime, na.rm=TRUE)))
+    # --- End flag calculation ---
+
+    # --- Final Check: Ensure ALL required columns exist before proceeding ---
+    # Define ALL columns your frontend components might possibly need from fullData
+    required_cols <- c("id", "player_name", "age", "league", "sport", "position",
+                       "scaled_value", "in_prime", "is_peak_age", "years_from_peak",
+                       "games_played") # Add any other essential base columns (e.g., games_played if used)
+    missing_cols <- required_cols[!required_cols %in% names(updated_full_data_df)]
+    if(length(missing_cols) > 0) {
+        # This is a critical error, likely in base data or the logic above
+        stop(paste("FATAL: Final updated_full_data_df is missing required columns before returning:", paste(missing_cols, collapse=", ")))
+    }
+    message("INFO: -> Final column check passed for updated_full_data_df.")
+    # --- End Final Check ---
 
     # --- Step 3: PQI Calculation ---
     message("INFO: Calculation Step 3: Calculating PQI...")
+    # Assuming calculate_prime_quality_index uses the data structure from process_player_primes
     pqi_calculated_df <- peakPerformR::calculate_prime_quality_index(temp_processed_data, nfl_by_position = TRUE, tier_method = "percentile")
     stopifnot("PQI calculation failed." = is.data.frame(pqi_calculated_df))
     # Rename safely
@@ -245,10 +281,14 @@ function(req, res) {
 
     # --- Step 4: CQI Calculation ---
     message("INFO: Calculation Step 4: Calculating CQI...")
+    # Prepare data for CQI using the *fully updated* full_data
     base_traj_minimal <- base_trajectory_data %>% select(id, age, predicted_value) %>% distinct(id, age, .keep_all = TRUE)
     processed_minimal <- temp_processed_data %>% select(id, career_avg_tier) %>% distinct(id, .keep_all=TRUE)
-    data_for_cqi <- updated_full_data_df %>% left_join(base_traj_minimal, by = c("id","age")) %>% left_join(processed_minimal, by = "id")
-    stopifnot("Data preparation for CQI failed." = is.data.frame(data_for_cqi))
+    # Ensure the updated_full_data_df has all necessary columns for the joins and CQI function
+    data_for_cqi <- updated_full_data_df %>%
+                        left_join(base_traj_minimal, by = c("id","age")) %>%
+                        left_join(processed_minimal, by = "id")
+    stopifnot("Data preparation for CQI failed (check columns in updated_full_data_df and joins)." = is.data.frame(data_for_cqi))
 
     cqi_calculated_df <- peakPerformR::calculate_career_quality_index(data_for_cqi, nfl_by_position = FALSE, tier_method = "percentile", exclude_positions = c("OL", "SPEC"), min_seasons = 5)
     stopifnot("CQI calculation failed." = is.data.frame(cqi_calculated_df))
@@ -263,7 +303,8 @@ function(req, res) {
     message(sprintf("INFO: -> CQI calculation complete: %d rows", nrow(cqi_calculated_df)))
 
     # --- Step 5: Final Filtering (Consistency) ---
-    message("INFO: Calculation Step 5: Applying Final Filtering...")
+    # This step only affects the pqi and cqi dataframes being returned, not fullData
+    message("INFO: Calculation Step 5: Applying Final Filtering for PQI/CQI consistency...")
     pqi_final_df <- pqi_calculated_df
     cqi_final_df <- cqi_calculated_df
     if (nrow(pqi_calculated_df) > 0 && nrow(cqi_calculated_df) > 0 && all(c("id", "position") %in% names(pqi_calculated_df)) && all(c("id", "position") %in% names(cqi_calculated_df))) {
@@ -272,7 +313,7 @@ function(req, res) {
       common_ids <- intersect(pqi_filtered$id, cqi_filtered$id)
       pqi_final_df <- pqi_filtered %>% filter(id %in% common_ids)
       cqi_final_df <- cqi_filtered %>% filter(id %in% common_ids)
-      message(sprintf("INFO: -> Final filtering applied. Final PQI rows: %d, Final CQI rows: %d", nrow(pqi_final_df), nrow(cqi_final_df)))
+      message(sprintf("INFO: -> Final PQI/CQI filtering applied. Final PQI rows: %d, Final CQI rows: %d", nrow(pqi_final_df), nrow(cqi_final_df)))
     } else {
       message("WARN: Skipping final PQI/CQI filtering due to empty inputs or missing columns.")
     }
@@ -280,11 +321,12 @@ function(req, res) {
     calculation_end_time <- Sys.time()
     message(sprintf("INFO: Calculation sequence successful. Duration: %.2f seconds", difftime(calculation_end_time, calculation_start_time, units = "secs")))
 
-    # Return successful results list
+    # Return successful results list, ensuring the corrected updated_full_data_df is used
     list(
       success = TRUE, message = "Recalculation successful.", parameters = current_params,
       dataSummary = list(rawPrimesCount = nrow(new_raw_primes_df), splinePrimesCount = nrow(new_spline_primes_df), pqiCount = nrow(pqi_final_df), cqiCount = nrow(cqi_final_df), fullDataRows = nrow(updated_full_data_df)),
-      rawPrimes = new_raw_primes_df, splinePrimes = new_spline_primes_df, pqi = pqi_final_df, cqi = cqi_final_df, fullData = updated_full_data_df
+      rawPrimes = new_raw_primes_df, splinePrimes = new_spline_primes_df, pqi = pqi_final_df, cqi = cqi_final_df,
+      fullData = updated_full_data_df # Crucial: Return the fully updated dataframe
     )
 
   }, error = function(e) { # Catch errors from ANY calculation step
@@ -305,6 +347,7 @@ function(req, res) {
     results$success <- FALSE
     # Provide user-friendly message, detailed error already logged
     results$message <- paste("Internal server error during calculation. Please check server logs or contact support. Ref:", calculation_result$message)
+    # Clear data fields in error response
     results$rawPrimes <- list(); results$splinePrimes <- list(); results$pqi <- list(); results$cqi <- list(); results$fullData <- list()
     final_response_list <- results
   } else {
@@ -328,8 +371,9 @@ function(req, res) {
     error_msg_json <- "Internal server error: Failed to serialize results to JSON."
     message("CRITICAL ERROR: ", error_msg_json, " JSON Error: ", conditionMessage(e));
     res$status <- 500
+    # Manually construct a safe JSON error response
     sprintf('{"success": false, "message": "%s", "parameters": %s, "dataSummary": {}, "rawPrimes": [], "splinePrimes": [], "pqi": [], "cqi": [], "fullData": []}',
-            gsub('"', '\\\\"', error_msg_json),
+            gsub('"', '\\\\"', error_msg_json), # Escape quotes in message
             jsonlite::toJSON(current_params, auto_unbox = TRUE, na = "null") %||% '{}'
     )
   })
@@ -337,7 +381,7 @@ function(req, res) {
   # --- Final Logging and Return ---
   endpoint_duration <- difftime(Sys.time(), endpoint_start_time, units = "secs")
   message(sprintf("INFO: /recalculate completed. Status: %d. Duration: %.2f seconds",
-                  res$status %||% 500,
+                  res$status %||% 500, # Use 500 if status is somehow NULL
                   endpoint_duration))
 
   res$body <- response_body
