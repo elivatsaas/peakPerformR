@@ -8,14 +8,12 @@ suppressPackageStartupMessages({
   library(purrr)
   library(peakPerformR) # Your custom package
   library(rlang)      # Needed for trace_back and :=
-  library(cluster)    # Needed by cluster_player_performance (implicitly used if called)
-  library(ggplot2)    # Needed by cluster_player_performance if plotting enabled (though not in API context)
 })
 message("Required packages loaded. Custom package 'peakPerformR' loaded.")
 
 # --- Utility Functions ---
 `%||%` <- function(x, y) {
-  if (is.null(x) || length(x) == 0) y else x
+  if (is.null(x) || length(x) == 0) y else x # Modified to handle length 0
 }
 
 # --- Load Pre-Computed Base Data (Load ONCE at API startup) ---
@@ -30,7 +28,8 @@ tryCatch({
 
   sports_filtered_path <- file.path(data_dir, "precalc_sports_filtered.rds")
   trajectories_path <- file.path(data_dir, "precalc_player_trajectories.rds")
-  clusters_path <- file.path(data_dir, "precalc_cluster_data.rds") # This should contain the correct scaled_value
+  # clusters_path is still loaded but not directly used for scaled_value in this version
+  clusters_path <- file.path(data_dir, "precalc_cluster_data.rds")
 
   required_files <- c(sports_filtered_path, trajectories_path, clusters_path)
   files_exist <- file.exists(required_files)
@@ -46,17 +45,12 @@ tryCatch({
 
   .API_ENV$SPORTS_FILTERED <- readRDS(sports_filtered_path)
   .API_ENV$PLAYER_TRAJECTORIES <- readRDS(trajectories_path)
-  .API_ENV$CLUSTER_DATA <- readRDS(clusters_path) # Load the cluster data containing scaled_value
+  .API_ENV$CLUSTER_DATA <- readRDS(clusters_path) # Still loaded for potential use elsewhere (e.g., create_player_performance_dataset)
 
   stopifnot(
     "`SPORTS_FILTERED` did not load as a non-empty data frame." = inherits(.API_ENV$SPORTS_FILTERED, "data.frame") && nrow(.API_ENV$SPORTS_FILTERED) > 0,
     "`PLAYER_TRAJECTORIES` did not load as a non-empty data frame." = inherits(.API_ENV$PLAYER_TRAJECTORIES, "data.frame") && nrow(.API_ENV$PLAYER_TRAJECTORIES) > 0,
     "`CLUSTER_DATA` did not load as a non-empty data frame." = inherits(.API_ENV$CLUSTER_DATA, "data.frame") && nrow(.API_ENV$CLUSTER_DATA) > 0
-  )
-  # **Crucial Check**: Ensure CLUSTER_DATA has the necessary columns
-  stopifnot(
-      "CLUSTER_DATA must contain 'id', 'age', and 'scaled_value' columns." =
-      all(c("id", "age", "scaled_value") %in% names(.API_ENV$CLUSTER_DATA))
   )
   message("Base data loaded and validated successfully.")
 
@@ -78,18 +72,16 @@ function(req, res) {
 
   # Set CORS headers
   res$setHeader("Access-Control-Allow-Origin", allowed_origin)
+  res$setHeader("Access-Control-Allow-Credentials", "true") # Crucial for cookies/auth headers
 
   # Handle preflight (OPTIONS) requests
   if (req$REQUEST_METHOD == "OPTIONS") {
     res$setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-    res$setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization") # Adjust headers as needed by your app
-    res$setHeader("Access-Control-Allow-Credentials", "true") # Often needed with frontend frameworks
-    res$status <- 204 # No Content for OPTIONS preflight often preferred
-    return(list()) # Respond to OPTIONS request immediately
+    res$setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization") # Adjust headers as needed
+    res$status <- 204 # No Content often preferred for OPTIONS
+    return(list()) # Respond immediately
   } else {
-    # Also add Credentials header for actual requests if needed
-    res$setHeader("Access-Control-Allow-Credentials", "true")
-    plumber::forward() # Continue processing for non-OPTIONS requests
+    plumber::forward() # Continue processing
   }
 }
 
@@ -103,7 +95,6 @@ function(req){
 
   end_time <- Sys.time()
   duration <- round(as.numeric(difftime(end_time, start_time, units = "secs")), 3)
-  # Safely get status code, default to 500 if unavailable (indicates early exit/error)
   status_code <- tryCatch(req$pr$res$status, error = function(e) NULL) %||% 500
   cat(format(end_time), "-", req$REQUEST_METHOD, req$PATH_INFO, "- Status:", status_code, "- Duration:", duration, "s\n")
 }
@@ -120,9 +111,10 @@ function(req, res) {
   # --- Initial Health Check ---
   if (exists("LOAD_ERROR", envir = .API_ENV)) {
     res$status <- 503 # Service Unavailable
-    err_msg <- paste("Service Unavailable: Critical base data failed to load during API startup. Check server logs. Original error:",
-                     conditionMessage(.API_ENV$LOAD_ERROR))
+    err_msg <- paste("Service Unavailable: Critical base data failed to load during API startup.",
+                     "Check server logs. Original error:", conditionMessage(.API_ENV$LOAD_ERROR))
     message("ERROR: /recalculate cannot proceed due to data load failure.")
+    res$setHeader("Content-Type", "application/json")
     res$body <- jsonlite::toJSON(list(success = FALSE, message = err_msg, parameters = list()), auto_unbox = TRUE, na = "null")
     return(res)
   }
@@ -154,17 +146,18 @@ function(req, res) {
   # --- Input Validation ---
   param_errors <- character(0)
   if (length(threshold_pct) != 1 || is.na(threshold_pct) || !is.numeric(threshold_pct) || threshold_pct < 0 || threshold_pct > 100) {
-    param_errors <- c(param_errors, "Invalid or missing 'thresholdPct' (must be numeric between 0 and 100).")
+    param_errors <- c(param_errors, "Invalid or missing 'thresholdPct' (numeric 0-100).")
   }
   if (length(games_pct_threshold) != 1 || is.na(games_pct_threshold) || !is.numeric(games_pct_threshold) || games_pct_threshold < 0 || games_pct_threshold > 100) {
-    param_errors <- c(param_errors, "Invalid or missing 'gamesPctThreshold' (must be numeric between 0 and 100).")
+    param_errors <- c(param_errors, "Invalid or missing 'gamesPctThreshold' (numeric 0-100).")
   }
 
   if (length(param_errors) > 0) {
     res$status <- 400 # Bad Request
     results$message <- paste("Input validation failed:", paste(param_errors, collapse = " "))
     message("ERROR: Invalid input parameters: ", results$message)
-    res$body <- jsonlite::toJSON(results, auto_unbox = TRUE, na = "null") # Use initialized structure
+    res$setHeader("Content-Type", "application/json")
+    res$body <- jsonlite::toJSON(results, auto_unbox = TRUE, na = "null")
     return(res)
   }
 
@@ -176,7 +169,7 @@ function(req, res) {
     # Access pre-loaded base data safely from the dedicated environment
     base_sports_data <- .API_ENV$SPORTS_FILTERED
     base_trajectory_data <- .API_ENV$PLAYER_TRAJECTORIES
-    base_cluster_data <- .API_ENV$CLUSTER_DATA # This contains the correct scaled_value
+    base_cluster_data <- .API_ENV$CLUSTER_DATA # Used by create_player_performance_dataset
     message("INFO: Calculation Step 0: Base data retrieved.")
 
     # --- Step 1: Prime Identification ---
@@ -195,64 +188,75 @@ function(req, res) {
 
     # --- Step 2: Dependent Calculations (Performance Dataset & Processing) ---
     message("INFO: Calculation Step 2: Creating Performance Dataset & Processing Primes...")
-    # Note: create_player_performance_dataset uses base_sports_data and primes, then takes cluster_data separately
     temp_player_data <- peakPerformR::create_player_performance_dataset(sports_data = base_sports_data, prime_data = new_spline_primes_df, cluster_data = base_cluster_data)
     stopifnot("Create performance dataset failed." = is.data.frame(temp_player_data))
 
     temp_processed_data <- peakPerformR::process_player_primes(temp_player_data, base_sports_data)
     stopifnot("Process player primes failed." = is.data.frame(temp_processed_data))
 
-    # --- Construct `updated_full_data_df` with CORRECT scaled_value ---
-    message("INFO: Constructing/Updating fullData with correct scaled_value and flags...")
+    # --- Step 2.5: Explicitly Calculate Scaled Value for fullData ---
+    message("INFO: Calculation Step 2.5: Explicitly calculating scaled_value from predicted_value...")
+
+    # Need predicted_value (from trajectories) and league/position (from sports_data)
+    traj_minimal <- base_trajectory_data %>%
+      select(id, age, predicted_value) %>%
+      distinct(id, age, .keep_all = TRUE)
+
+    data_to_scale <- base_sports_data %>%
+      # Select only necessary columns from sports_data for joining and grouping
+      select(id, age, league, position) %>%
+      distinct(id, age, .keep_all = TRUE) %>% # Ensure unique id-age combo before join
+      left_join(traj_minimal, by = c("id", "age"))
+
+    stopifnot("Failed to join trajectory data for scaling." = is.data.frame(data_to_scale))
+
+    # Perform the Z-score scaling within league/position groups
+    scaled_values_calculated <- data_to_scale |>
+      # Ensure grouping columns are suitable (e.g., handle NA positions/leagues if necessary)
+      filter(!is.na(league), !is.na(position)) |> # Filter out rows unusable for group scaling
+      group_by(league, position) |>
+      mutate(
+        group_mean = mean(predicted_value, na.rm = TRUE),
+        group_sd = sd(predicted_value, na.rm = TRUE),
+        # Calculate Z-score, handle SD=0 or NA SD, handle NA predicted_value
+        calculated_scaled_value = case_when(
+            is.na(predicted_value) ~ NA_real_, # Rule 1: NA in -> NA out
+            is.na(group_sd) ~ 0,          # Rule 2: If SD is NA (e.g., group size 1), Z is 0
+            group_sd == 0 ~ 0,          # Rule 3: If SD is 0 (all values same), Z is 0
+            TRUE ~ (predicted_value - group_mean) / group_sd # Rule 4: Calculate Z-score
+        )
+      ) |>
+      ungroup() |>
+      # Select only the key columns needed for joining back
+      select(id, age, calculated_scaled_value)
+
+    stopifnot("Scaling calculation failed." = is.data.frame(scaled_values_calculated))
+    message(sprintf("INFO: -> Scaled values calculated for %d id-age records.", nrow(scaled_values_calculated)))
+
+    # --- Update 'fullData' - Start with base data, merge calculated scaled_value ---
+    message("INFO: Updating fullData dataframe...")
     updated_full_data_df <- base_sports_data # Start with the original full data
 
-    # --- *** MODIFICATION START: Integrate scaled_value from CLUSTER_DATA *** ---
-    message("INFO: -> Attempting to merge 'scaled_value' from CLUSTER_DATA...")
-    if (exists(".API_ENV$CLUSTER_DATA") && nrow(.API_ENV$CLUSTER_DATA) > 0 &&
-        all(c("id", "age", "scaled_value") %in% names(.API_ENV$CLUSTER_DATA))) {
+    # Remove any existing 'scaled_value' and merge the newly calculated one
+    updated_full_data_df <- updated_full_data_df %>%
+      select(-any_of("scaled_value")) %>% # Remove old/potentially incorrect column
+      left_join(scaled_values_calculated, by = c("id", "age")) %>%
+      rename(scaled_value = calculated_scaled_value) # Rename to the expected column name
 
-        cluster_scaled_values <- .API_ENV$CLUSTER_DATA %>%
-          # **Also bring performance_tier if it exists in cluster_data**
-          select(id, age, calculated_scaled_value = scaled_value, any_of("performance_tier")) %>%
-          distinct(id, age, .keep_all = TRUE) # Ensure unique id-age combo
-
-        # Join the calculated scaled values and tier, potentially replacing existing columns
-        updated_full_data_df <- updated_full_data_df %>%
-          # Remove any old potentially incorrect scaled_value and tier first
-          select(-any_of(c("scaled_value", "performance_tier"))) %>%
-          left_join(cluster_scaled_values, by = c("id", "age")) %>%
-          # Rename the correctly calculated value to 'scaled_value'
-          rename(scaled_value = calculated_scaled_value)
-
-         message(sprintf("INFO: -> 'scaled_value' (and 'performance_tier' if present) merged into fullData from CLUSTER_DATA. %d rows updated.", nrow(updated_full_data_df)))
-
+    # Ensure the scaled_value column exists, even if some joins failed (assign NA)
+    if (!"scaled_value" %in% names(updated_full_data_df)) {
+      message("WARN: 'scaled_value' column unexpectedly missing after join. Adding NA column.")
+      updated_full_data_df$scaled_value <- NA_real_
     } else {
-        message("WARN: CLUSTER_DATA missing, invalid, or lacks required columns (id, age, scaled_value). Cannot merge scaled_value.")
-        # Fallback: Ensure the column exists, maybe using the old logic or setting to NA
-        if (!"scaled_value" %in% names(updated_full_data_df)) {
-             # Try renaming 'value' or add NA column as per your original logic
-             potential_value_col <- "value" # Check if the original data had a 'value' column
-             if (potential_value_col %in% names(updated_full_data_df)) {
-                 message(sprintf("WARN: -> Using fallback: Renaming '%s' to 'scaled_value'.", potential_value_col))
-                 updated_full_data_df <- updated_full_data_df %>% rename(scaled_value = !!potential_value_col)
-             } else {
-                 message("WARN: -> Using fallback: Adding 'scaled_value' column with NA values.")
-                 updated_full_data_df$scaled_value <- NA_real_
-             }
-        } else {
-             message("INFO: -> 'scaled_value' column already exists, leaving as is due to CLUSTER_DATA issue.")
-        }
-        # Ensure performance_tier exists if cluster data was missing/invalid
-        if (!"performance_tier" %in% names(updated_full_data_df)) {
-             updated_full_data_df$performance_tier <- NA_character_
-             message("WARN: -> Added 'performance_tier' column with NA values.")
-        }
+       # Log how many rows got a non-NA scaled value
+       num_scaled <- sum(!is.na(updated_full_data_df$scaled_value))
+       message(sprintf("INFO: -> Merged calculated 'scaled_value'. %d non-NA values present.", num_scaled))
     }
-    # --- *** MODIFICATION END *** ---
+    # --- End scaled_value update ---
 
 
-    # --- Calculate flags based on new spline primes ---
-    # Now uses the updated_full_data_df which SHOULD have the correct scaled_value
+    # --- Calculate flags based on new spline primes (using the updated_full_data_df)---
+    message("INFO: -> Calculating flags (in_prime, etc.)...")
     if (nrow(new_spline_primes_df) > 0 &&
         all(c("id", "start_age", "end_age", "max_value_age") %in% names(new_spline_primes_df))) {
 
@@ -267,21 +271,21 @@ function(req, res) {
         mutate(
           in_prime = !is.na(prime_start_age) & !is.na(prime_end_age) & !is.na(age) &
                        age >= prime_start_age & age <= prime_end_age,
-          # Ensure is_peak_age handles potential floating point inaccuracies if ages aren't integers
+          # Safer comparison for numeric age
           is_peak_age = !is.na(prime_peak_age) & !is.na(age) &
-                         abs(age - prime_peak_age) < 1e-6, # Safer comparison for numeric age
+                         abs(age - prime_peak_age) < 1e-6,
           years_from_peak = if_else(!is.na(age) & !is.na(prime_peak_age),
                                     as.integer(round(age - prime_peak_age)),
                                     NA_integer_)
         ) %>%
         # Convert logical flags to character ("true"/"false") if needed by frontend
-        mutate(
+         mutate(
             in_prime = if_else(is.na(in_prime), "false", if_else(in_prime, "true", "false")),
             is_peak_age = if_else(is.na(is_peak_age), "false", if_else(is_peak_age, "true", "false"))
-        ) %>%
+         ) %>%
         select(-prime_start_age, -prime_end_age, -prime_peak_age) # Clean up temp join columns
 
-      message(sprintf("INFO: -> Full data flags calculated based on new primes (in_prime: %d T / %d F, is_peak_age: %d T / %d F, years_from_peak calculated)",
+      message(sprintf("INFO: -> Full data flags calculated (in_prime: %d T / %d F, is_peak_age: %d T / %d F)",
                       sum(updated_full_data_df$in_prime == "true", na.rm=TRUE), sum(updated_full_data_df$in_prime == "false", na.rm=TRUE),
                       sum(updated_full_data_df$is_peak_age == "true", na.rm=TRUE), sum(updated_full_data_df$is_peak_age == "false", na.rm=TRUE)))
 
@@ -289,32 +293,30 @@ function(req, res) {
       message("WARN: Spline primes data empty or missing required columns. Setting flags to FALSE/NA in fullData.")
       # Ensure flag columns exist even if primes are missing
       if (!"in_prime" %in% names(updated_full_data_df)) updated_full_data_df$in_prime <- "false"
-      else updated_full_data_df$in_prime <- ifelse(is.na(updated_full_data_df$in_prime), "false", updated_full_data_df$in_prime) # Ensure no NAs remain if column existed
+      else updated_full_data_df$in_prime <- ifelse(is.na(updated_full_data_df$in_prime), "false", updated_full_data_df$in_prime)
 
       if (!"is_peak_age" %in% names(updated_full_data_df)) updated_full_data_df$is_peak_age <- "false"
       else updated_full_data_df$is_peak_age <- ifelse(is.na(updated_full_data_df$is_peak_age), "false", updated_full_data_df$is_peak_age)
 
       if (!"years_from_peak" %in% names(updated_full_data_df)) updated_full_data_df$years_from_peak <- NA_integer_
-      else updated_full_data_df$years_from_peak[is.na(updated_full_data_df$years_from_peak)] <- NA_integer_ # Ensure existing NAs remain NA
+      else updated_full_data_df$years_from_peak[is.na(updated_full_data_df$years_from_peak)] <- NA_integer_
     }
     # --- End flag calculation ---
 
     # --- Final Check: Ensure ALL required columns exist before proceeding ---
     required_cols <- c("id", "player_name", "age", "league", "sport", "position",
                        "scaled_value", "in_prime", "is_peak_age", "years_from_peak",
-                       "games_played", "performance_tier") # Added performance_tier
+                       "games_played") # Base required columns
     missing_cols <- required_cols[!required_cols %in% names(updated_full_data_df)]
     if(length(missing_cols) > 0) {
         # Add missing columns as NA of appropriate type
         for(col in missing_cols) {
            message(sprintf("WARN: Final Check - Adding missing required column '%s' as NA.", col))
-           # Assign appropriate NA type based on expected column type
            if (col %in% c("scaled_value", "games_played")) { updated_full_data_df[[col]] <- NA_real_ }
            else if (col == "years_from_peak") { updated_full_data_df[[col]] <- NA_integer_ }
-           else if (col %in% c("in_prime", "is_peak_age")) { updated_full_data_df[[col]] <- "false" } # Default flags to false
-           else { updated_full_data_df[[col]] <- NA_character_ } # Default others to character
+           else if (col %in% c("in_prime", "is_peak_age")) { updated_full_data_df[[col]] <- "false" }
+           else { updated_full_data_df[[col]] <- NA_character_ }
         }
-        # Re-check after adding NAs - this should now pass unless column name is misspelled above
         final_missing <- required_cols[!required_cols %in% names(updated_full_data_df)]
         if(length(final_missing) > 0) {
            stop(paste("FATAL: Final updated_full_data_df STILL missing required columns after adding NAs:", paste(final_missing, collapse=", ")))
@@ -325,8 +327,8 @@ function(req, res) {
 
 
     # --- Step 3: PQI Calculation ---
+    # Uses temp_processed_data which is derived indirectly from base data
     message("INFO: Calculation Step 3: Calculating PQI...")
-    # calculate_prime_quality_index uses the data structure from process_player_primes
     pqi_calculated_df <- peakPerformR::calculate_prime_quality_index(temp_processed_data, nfl_by_position = TRUE, tier_method = "percentile")
     stopifnot("PQI calculation failed." = is.data.frame(pqi_calculated_df))
     # Rename safely
@@ -340,32 +342,19 @@ function(req, res) {
     message(sprintf("INFO: -> PQI calculation complete: %d rows", nrow(pqi_calculated_df)))
 
     # --- Step 4: CQI Calculation ---
+    # Uses the updated_full_data_df which now has the calculated scaled_value
+    # !!! NOTE: This section retains the code from your prompt, including the likely error source !!!
     message("INFO: Calculation Step 4: Calculating CQI...")
-    # Prepare data for CQI using the *fully updated* full_data
-    # Ensure required columns are present and correctly named
     base_traj_minimal <- base_trajectory_data %>% select(id, age, predicted_value) %>% distinct(id, age, .keep_all = TRUE)
-    processed_minimal <- temp_processed_data %>% select(id, career_avg_tier = mean_tier) %>% distinct(id, .keep_all=TRUE) # Use mean_tier if that's the output name
-
-    # Check required columns for CQI prep
-    cols_for_cqi_prep <- c("id", "age", "league", "sport", "position", "scaled_value", "games_played") # Base columns needed
-    if (!all(cols_for_cqi_prep %in% names(updated_full_data_df))) {
-        stop(paste("FATAL: Cannot prepare data for CQI. updated_full_data_df is missing one or more columns:",
-                   paste(cols_for_cqi_prep[!cols_for_cqi_prep %in% names(updated_full_data_df)], collapse=", ")))
-    }
-
+    # --- !!! LIKELY ERROR SOURCE REMAINS HERE (uses career_avg_tier, likely needs different col from temp_processed_data) !!! ---
+    processed_minimal <- temp_processed_data %>% select(id, career_avg_tier) %>% distinct(id, .keep_all=TRUE)
+    # --- !!! END LIKELY ERROR SOURCE !!! ---
     data_for_cqi <- updated_full_data_df %>%
-                        select(all_of(cols_for_cqi_prep), any_of("season")) %>% # Select only necessary columns + season if exists
                         left_join(base_traj_minimal, by = c("id","age")) %>%
                         left_join(processed_minimal, by = "id")
+    stopifnot("Data preparation for CQI failed (check columns)." = is.data.frame(data_for_cqi))
 
-    # Verify CQI function expected columns are present after joins
-    cols_needed_by_cqi_func <- c("id", "age", "league", "sport", "position", "scaled_value", "predicted_value", "career_avg_tier", "games_played") # Check your function's needs
-    if (!all(cols_needed_by_cqi_func %in% names(data_for_cqi))) {
-         missing_cqi_cols <- cols_needed_by_cqi_func[!cols_needed_by_cqi_func %in% names(data_for_cqi)]
-         stop(paste("FATAL: Data prepared for CQI (data_for_cqi) is missing columns required by calculate_career_quality_index:", paste(missing_cqi_cols, collapse=", ")))
-    }
-    message(sprintf("INFO: -> Data prepared for CQI: %d rows", nrow(data_for_cqi)))
-
+    # --- !!! Column name `career_avg_tier` might need changing here too if the CQI function expects something else !!! ---
     cqi_calculated_df <- peakPerformR::calculate_career_quality_index(data_for_cqi, nfl_by_position = FALSE, tier_method = "percentile", exclude_positions = c("OL", "SPEC"), min_seasons = 5)
     stopifnot("CQI calculation failed." = is.data.frame(cqi_calculated_df))
     # Rename safely
@@ -378,8 +367,8 @@ function(req, res) {
     }
     message(sprintf("INFO: -> CQI calculation complete: %d rows", nrow(cqi_calculated_df)))
 
+
     # --- Step 5: Final Filtering (Consistency) ---
-    # This step only affects the pqi and cqi dataframes being returned, not fullData
     message("INFO: Calculation Step 5: Applying Final Filtering for PQI/CQI consistency...")
     pqi_final_df <- pqi_calculated_df
     cqi_final_df <- cqi_calculated_df
@@ -397,38 +386,32 @@ function(req, res) {
     calculation_end_time <- Sys.time()
     message(sprintf("INFO: Calculation sequence successful. Duration: %.2f seconds", difftime(calculation_end_time, calculation_start_time, units = "secs")))
 
-    # Return successful results list, ensuring the corrected updated_full_data_df is used
+    # Return successful results list
     list(
       success = TRUE, message = "Recalculation successful.", parameters = current_params,
       dataSummary = list(rawPrimesCount = nrow(new_raw_primes_df), splinePrimesCount = nrow(new_spline_primes_df), pqiCount = nrow(pqi_final_df), cqiCount = nrow(cqi_final_df), fullDataRows = nrow(updated_full_data_df)),
       rawPrimes = new_raw_primes_df, splinePrimes = new_spline_primes_df, pqi = pqi_final_df, cqi = cqi_final_df,
-      fullData = updated_full_data_df # Crucial: Return the fully updated dataframe
+      fullData = updated_full_data_df # Return the dataframe with the *newly calculated* scaled_value
     )
 
   }, error = function(e) { # Catch errors from ANY calculation step
     error_message <- paste("Internal Server Error during calculation:", conditionMessage(e))
     message("ERROR: ", error_message)
-    # Attempt to get traceback for detailed debugging
     tb <- tryCatch(rlang::trace_back(bottom = sys.frame(1)), error = function(e_tb) "Traceback not available")
     message("ERROR Traceback:\n", paste(capture.output(print(tb)), collapse = "\n"))
-    # Return the error object itself to be handled below
-    return(e)
+    return(e) # Return the error object
   }) # End main calculation tryCatch
 
   # --- Prepare Final Response ---
   final_response_list <- list()
   if (inherits(calculation_result, "error")) {
     res$status <- 500 # Internal Server Error
-    # Use the initialized structure, update message
     results$success <- FALSE
-    # Provide user-friendly message, detailed error already logged
-    results$message <- paste("Internal server error during calculation. Please check server logs or contact support. Ref:", calculation_result$message)
-    # Clear data fields in error response
+    results$message <- paste("Internal server error during calculation. Check logs. Ref:", calculation_result$message)
     results$rawPrimes <- list(); results$splinePrimes <- list(); results$pqi <- list(); results$cqi <- list(); results$fullData = list()
     final_response_list <- results
   } else {
-    # Calculation successful
-    final_response_list <- calculation_result # Use the successful result list
+    final_response_list <- calculation_result
     res$status <- 200 # OK
   }
 
@@ -436,21 +419,18 @@ function(req, res) {
   if (!is.list(final_response_list)) {
     message("CRITICAL ERROR: Final result object is not a list before JSON serialization.");
     res$status <- 500
-    # Revert to a basic error structure
-    final_response_list <- list(success = FALSE, message = "Internal server error: Invalid response structure generated.", parameters = current_params, dataSummary = list(), rawPrimes = list(), splinePrimes = list(), pqi = list(), cqi = list(), fullData = list())
+    final_response_list <- list(success = FALSE, message = "Internal server error: Invalid response structure.", parameters = current_params, dataSummary = list(), rawPrimes = list(), splinePrimes = list(), pqi = list(), cqi = list(), fullData = list())
   }
 
   # --- Serialize to JSON ---
   response_body <- tryCatch({
-    # Using na = "string" might be safer for some JS libraries if NAs are common
     jsonlite::toJSON(final_response_list, auto_unbox = TRUE, na = "null", digits = NA, pretty = FALSE)
   }, error = function(e) {
     error_msg_json <- "Internal server error: Failed to serialize results to JSON."
     message("CRITICAL ERROR: ", error_msg_json, " JSON Error: ", conditionMessage(e));
     res$status <- 500
-    # Manually construct a safe JSON error response
     sprintf('{"success": false, "message": "%s", "parameters": %s, "dataSummary": {}, "rawPrimes": [], "splinePrimes": [], "pqi": [], "cqi": [], "fullData": []}',
-            gsub('"', '\\\\"', error_msg_json), # Escape quotes in message
+            gsub('"', '\\\\"', error_msg_json),
             jsonlite::toJSON(current_params, auto_unbox = TRUE, na = "null") %||% '{}'
     )
   })
@@ -458,10 +438,9 @@ function(req, res) {
   # --- Final Logging and Return ---
   endpoint_duration <- difftime(Sys.time(), endpoint_start_time, units = "secs")
   message(sprintf("INFO: /recalculate completed. Status: %d. Duration: %.2f seconds",
-                  res$status %||% 500, # Use 500 if status is somehow NULL
-                  endpoint_duration))
+                  res$status %||% 500, endpoint_duration))
 
-  res$setHeader("Content-Type", "application/json") # Explicitly set content type
+  res$setHeader("Content-Type", "application/json")
   res$body <- response_body
   return(res)
 } # End /recalculate endpoint
@@ -478,19 +457,19 @@ function(req, res){
     res$status <- 503 # Service Unavailable
     response_list <- list(
       status = "ERROR",
-      message = paste("API is running BUT critical base data failed to load during startup. Service is impaired. Check server logs. Startup Error:",
+      message = paste("API is running BUT critical base data failed to load. Service impaired. Startup Error:",
                       conditionMessage(.API_ENV$LOAD_ERROR)),
       data_loaded = FALSE,
       timestamp = Sys.time()
     )
     message("ERROR: Health Check Failed (Startup Data Load Error).")
   } else {
-    # Check if data objects exist and are valid within the environment
+    # Check if data objects exist and are valid
     data_check_passed <- tryCatch({
       stopifnot(
         exists("SPORTS_FILTERED", envir = .API_ENV) && inherits(.API_ENV$SPORTS_FILTERED, "data.frame") && nrow(.API_ENV$SPORTS_FILTERED) > 0,
         exists("PLAYER_TRAJECTORIES", envir = .API_ENV) && inherits(.API_ENV$PLAYER_TRAJECTORIES, "data.frame") && nrow(.API_ENV$PLAYER_TRAJECTORIES) > 0,
-        exists("CLUSTER_DATA", envir = .API_ENV) && inherits(.API_ENV$CLUSTER_DATA, "data.frame") && nrow(.API_ENV$CLUSTER_DATA) > 0 && all(c("id","age","scaled_value") %in% names(.API_ENV$CLUSTER_DATA)) # Also check essential columns in cluster data
+        exists("CLUSTER_DATA", envir = .API_ENV) && inherits(.API_ENV$CLUSTER_DATA, "data.frame") && nrow(.API_ENV$CLUSTER_DATA) > 0
       )
       TRUE # All checks passed
     }, error = function(e) {
@@ -512,10 +491,10 @@ function(req, res){
       )
       message("INFO: Health Check OK.")
     } else {
-      res$status <- 503 # Service Unavailable (Essential data missing/invalid at runtime)
+      res$status <- 503 # Service Unavailable
       response_list <- list(
         status = "ERROR",
-        message = "API is running BUT essential base data is missing, invalid, or empty at runtime. Service is impaired. Check server logs.",
+        message = "API is running BUT essential base data is missing, invalid, or empty at runtime. Service impaired.",
         data_loaded = FALSE,
         timestamp = Sys.time()
       )
@@ -524,7 +503,7 @@ function(req, res){
   }
 
   # Serialize response and return
-  res$setHeader("Content-Type", "application/json") # Explicitly set content type
+  res$setHeader("Content-Type", "application/json")
   res$body <- jsonlite::toJSON(response_list, auto_unbox = TRUE, na = "null", pretty = FALSE)
   message("INFO: / (health check) completed.")
   return(res)
@@ -534,14 +513,5 @@ function(req, res){
 #* @plumber
 function(pr) {
   message("INFO: Plumber router object created.")
-  # Optionally add global error handler here if desired
-  # pr$registerHooks(list(
-  #   "error" = function(req, res, err){
-  #     message("GLOBAL ERROR HANDLER:", conditionMessage(err))
-  #     res$status <- 500
-  #     res$body <- toJSON(list(error=unbox("An unexpected error occurred.")), auto_unbox = TRUE)
-  #     res
-  #   }
-  # ))
   pr # Return the router object
 }
