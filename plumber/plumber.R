@@ -190,18 +190,42 @@ function(req, res) {
     stopifnot("Process player primes failed." = is.data.frame(temp_processed_data))
 
     # Update 'in_prime' flag using Spline primes for the full dataset output
-    updated_full_data_df <- base_sports_data # Start fresh
-    if (nrow(new_spline_primes_df) > 0 && all(c("id", "start_age", "end_age") %in% names(new_spline_primes_df))) {
-      primes_to_join <- new_spline_primes_df %>% select(id, prime_start_age = start_age, prime_end_age = end_age) %>% distinct(id, .keep_all = TRUE)
+   # --- Update 'in_prime' AND 'is_peak_age' flags using Spline primes ---
+    message("INFO: Updating 'in_prime' and 'is_peak_age' flags in fullData...")
+    updated_full_data_df <- base_sports_data # Start with the original full data
+
+    if (nrow(new_spline_primes_df) > 0 &&
+        all(c("id", "start_age", "end_age", "max_value_age") %in% names(new_spline_primes_df))) { # Check max_value_age exists
+
+      # Prepare distinct prime start/end and peak ages for joining
+      primes_info_to_join <- new_spline_primes_df %>%
+        select(id, prime_start_age = start_age, prime_end_age = end_age, prime_peak_age = max_value_age) %>%
+        distinct(id, .keep_all = TRUE) # Ensure one row per player
+
       updated_full_data_df <- updated_full_data_df %>%
-        left_join(primes_to_join, by = "id") %>%
-        mutate(in_prime = !is.na(prime_start_age) & !is.na(prime_end_age) & !is.na(age) & age >= prime_start_age & age <= prime_end_age) %>%
-        select(-prime_start_age, -prime_end_age)
+        left_join(primes_info_to_join, by = "id") %>%
+        mutate(
+          # Calculate in_prime based on joined spline start/end ages
+          in_prime = !is.na(prime_start_age) & !is.na(prime_end_age) & !is.na(age) &
+                       age >= prime_start_age & age <= prime_end_age,
+
+          # Calculate is_peak_age based on joined spline peak age
+          is_peak_age = !is.na(prime_peak_age) & !is.na(age) &
+                         age == prime_peak_age
+        ) %>%
+        select(-prime_start_age, -prime_end_age, -prime_peak_age) # Clean up temporary join columns
+
+        message(sprintf("INFO: -> Full data flags updated (in_prime: %d T / %d F, is_peak_age: %d T / %d F)",
+                        sum(updated_full_data_df$in_prime, na.rm=TRUE), sum(!updated_full_data_df$in_prime, na.rm=TRUE),
+                        sum(updated_full_data_df$is_peak_age, na.rm=TRUE), sum(!updated_full_data_df$is_peak_age, na.rm=TRUE)))
+
     } else {
-      message("WARN: Spline primes data empty or missing columns. Setting 'in_prime' to FALSE for all in fullData.")
-      updated_full_data_df <- updated_full_data_df %>% mutate(in_prime = FALSE)
+      message("WARN: Spline primes data empty or missing required columns (id, start_age, end_age, max_value_age). Setting 'in_prime' and 'is_peak_age' to FALSE for all in fullData.")
+      updated_full_data_df <- updated_full_data_df %>%
+        mutate(in_prime = FALSE, is_peak_age = FALSE) # Ensure both flags are added even if FALSE
     }
-    stopifnot("Updating 'in_prime' flag failed." = is.data.frame(updated_full_data_df))
+    stopifnot("Updating 'in_prime' and 'is_peak_age' flags failed." = is.data.frame(updated_full_data_df) && all(c("in_prime", "is_peak_age") %in% names(updated_full_data_df)))
+    
     message(sprintf("INFO: -> Performance data processed, full data 'in_prime' flag updated (%d T / %d F)",
                     sum(updated_full_data_df$in_prime, na.rm=TRUE), sum(!updated_full_data_df$in_prime, na.rm=TRUE)))
 
