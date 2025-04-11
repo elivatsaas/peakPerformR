@@ -1,4 +1,4 @@
-#' Calculate Career Quality Index (CQI) - v20 (Modified: No pmax)
+#' Calculate Career Quality Index (CQI) 
 #'
 #' @description
 #' Calculates CQI using dplyr, addressing data mask errors in dynamic grouping.
@@ -27,7 +27,7 @@
 #' @importFrom dplyr if_else first n_distinct percent_rank coalesce case_when select filter group_by summarise mutate ungroup left_join semi_join distinct arrange rename group_split bind_cols everything all_of any_of group_keys across
 
 
-calculate_career_quality_index_no_pmax <- function(player_data,
+calculate_career_quality_index <- function(player_data,
                                                    nfl_by_position = TRUE,
                                                    exclude_positions = c("OL"),
                                                    min_seasons = 5,
