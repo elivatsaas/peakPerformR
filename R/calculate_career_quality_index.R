@@ -1,9 +1,10 @@
-#' Calculate Career Quality Index (CQI) - v20
+#' Calculate Career Quality Index (CQI) - v20 (Modified: No pmax)
 #'
 #' @description
 #' Calculates CQI using dplyr, addressing data mask errors in dynamic grouping.
 #' Relies on a separate globals.R file for utils::globalVariables declarations.
 #' Includes skip logic disabling, robustness features.
+#' Allows negative cqi_raw values by removing pmax(0, ...).
 #'
 #' @param player_data A data frame with player performance data.
 #'                    Requires: id, player_name, sport, position, league, season,
@@ -26,14 +27,13 @@
 #' @importFrom dplyr if_else first n_distinct percent_rank coalesce case_when select filter group_by summarise mutate ungroup left_join semi_join distinct arrange rename group_split bind_cols everything all_of any_of group_keys across
 
 
-
-calculate_career_quality_index <- function(player_data,
-                                           nfl_by_position = TRUE,
-                                           exclude_positions = c("OL"),
-                                           min_seasons = 5,
-                                           tier_method = "percentile",
-                                           save_output = FALSE,
-                                           output_file = "cqi_scores.csv") {
+calculate_career_quality_index_no_pmax <- function(player_data,
+                                                   nfl_by_position = TRUE,
+                                                   exclude_positions = c("OL"),
+                                                   min_seasons = 5,
+                                                   tier_method = "percentile",
+                                                   save_output = FALSE,
+                                                   output_file = "cqi_scores.csv") {
 
   if (tier_method == "cluster" && !requireNamespace("cluster", quietly = TRUE)) { stop("Install 'cluster' package for cluster method.") }
   if (!tier_method %in% c("percentile", "cluster")) { stop("tier_method must be 'percentile' or 'cluster'") }
@@ -99,12 +99,21 @@ calculate_career_quality_index <- function(player_data,
     dplyr::mutate(career_peak_value = ifelse(is.infinite(.data$career_peak_value), NA_real_, .data$career_peak_value))
   if (!"prime_seasons" %in% names(career_data)) { career_data <- career_data |> dplyr::mutate(prime_seasons = NA_integer_)
   } else { career_data <- career_data |> dplyr::mutate(prime_seasons = ifelse(is.na(.data$prime_seasons), 0L, .data$prime_seasons)) }
+
+  # Calculate cqi_raw (MODIFIED: NO pmax)
   career_data <- career_data |>
-    dplyr::mutate( career_avg_value_safe = dplyr::coalesce(.data$career_avg_value, 0),
-                   career_peak_value_safe = dplyr::coalesce(.data$career_peak_value, 0), career_seasons_safe = dplyr::coalesce(.data$career_seasons, 0),
-                   cqi_raw = dplyr::case_when( .data$career_seasons_safe > 0 ~
-                                                 (.data$career_avg_value_safe + (.data$career_peak_value_safe * 0.5)) * log(.data$career_seasons_safe + 1), TRUE ~ 0 ),
-                   cqi_raw = pmax(0, ifelse(is.finite(.data$cqi_raw), .data$cqi_raw, 0)) ) |>
+    dplyr::mutate(
+      career_avg_value_safe = dplyr::coalesce(.data$career_avg_value, 0),
+      career_peak_value_safe = dplyr::coalesce(.data$career_peak_value, 0),
+      career_seasons_safe = dplyr::coalesce(.data$career_seasons, 0),
+      cqi_raw = dplyr::case_when(
+        .data$career_seasons_safe > 0 ~
+          (.data$career_avg_value_safe + (.data$career_peak_value_safe * 0.5)) * log(.data$career_seasons_safe + 1),
+        TRUE ~ 0 # Default to 0 if no seasons (shouldn't happen due to filter)
+      ),
+      # Ensure cqi_raw is finite, replacing Inf/NaN with 0, but KEEP negatives
+      cqi_raw = ifelse(is.finite(.data$cqi_raw), .data$cqi_raw, 0)
+    ) |>
     dplyr::select(-dplyr::any_of(c("career_avg_value_safe", "career_peak_value_safe", "career_seasons_safe")))
 
 
@@ -169,6 +178,17 @@ calculate_career_quality_index <- function(player_data,
         return(group_data |> dplyr::select(-.data$.final_group))
       })
   }
+
+  # Rename columns for consistency with original request output sample
+  cqi <- cqi |>
+    dplyr::rename(cqi_selected = cqi_score, selected_tier = career_tier) |>
+    # Reorder to match the provided CSV structure as best as possible
+    dplyr::select(
+        id, player_name, sport, position, league, career_seasons, career_games,
+        prime_seasons, career_peak_value, career_avg_value, latest_season_played,
+        max_age, is_active, cqi_raw, cqi_selected, selected_tier, dplyr::everything() # Keep any extra columns at the end
+    )
+
 
   # (Save output and final message remain the same)
   if(save_output) { if(nrow(cqi) > 0) { tryCatch({ utils::write.csv(cqi, output_file, row.names = FALSE); message("CQI scores saved.") }, error = function(e) { warning("Failed to save CQI output.") }) } else { message("No CQI results to save.") } }
