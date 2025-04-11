@@ -26,6 +26,7 @@ tryCatch({
   normalized_base_path <- tryCatch(normalizePath(getwd(), mustWork = FALSE), error=function(e) getwd())
   message("Attempting to load base data relative to CWD: ", normalized_base_path)
 
+  # Load data filtered to only include players with splines
   sports_filtered_path <- file.path(data_dir, "precalc_sports_filtered.rds")
   trajectories_path <- file.path(data_dir, "precalc_player_trajectories.rds")
   clusters_path <- file.path(data_dir, "precalc_cluster_data.rds") # Still loaded for potential use elsewhere
@@ -173,6 +174,7 @@ function(req, res) {
 
     # --- Step 1: Prime Identification ---
     message("INFO: Calculation Step 1: Identifying Primes...!")
+    # Since base data is already filtered, joins should align naturally
     spline_join_data <- base_sports_data %>% select(id, league, position, age, games_played) %>% distinct(id, age, .keep_all = TRUE)
     spline_input_data <- base_trajectory_data %>% left_join(spline_join_data, by = c("id", "age"))
     stopifnot("Data prep for spline input failed." = is.data.frame(spline_input_data))
@@ -180,18 +182,12 @@ function(req, res) {
     # Log package version being used
     message("INFO: peakPerformR version in API: ", as.character(packageVersion("peakPerformR")))
 
-    # Add detailed logging for specific player if needed (example for Derrick Rose)
-    # derrick_rose_id <- "NBA-derrick-rose-00"
-    # if (exists("spline_input_data") && inherits(spline_input_data, "data.frame") && derrick_rose_id %in% spline_input_data$id) {
-    #   rose_input_data_api <- spline_input_data %>% filter(id == derrick_rose_id) %>% arrange(age) %>% select(id, age, league, games_played, predicted_value, games_threshold)
-    #   message("DEBUG API: Derrick Rose input data for identify_prime (using dput):"); dput(rose_input_data_api)
-    #   message("DEBUG API: Derrick Rose input data for identify_prime (using print):"); print(rose_input_data_api)
-    # }
-
+    # Calculate primes using the predicted trajectory values
     new_spline_primes_df <- peakPerformR::identify_prime(spline_input_data, method = "predicted", threshold_pct = threshold_pct, games_pct_threshold = games_pct_threshold)
     stopifnot("Spline prime identification failed." = is.data.frame(new_spline_primes_df))
     message(sprintf("INFO: -> Spline primes identified: %d rows", nrow(new_spline_primes_df)))
 
+    # Calculate primes using the raw actual player values
     new_raw_primes_df <- peakPerformR::identify_prime(base_sports_data, method = "actual", threshold_pct = threshold_pct, games_pct_threshold = games_pct_threshold)
     stopifnot("Raw prime identification failed." = is.data.frame(new_raw_primes_df))
     message(sprintf("INFO: -> Raw primes identified: %d rows", nrow(new_raw_primes_df)))
@@ -203,10 +199,6 @@ function(req, res) {
 
     temp_processed_data <- peakPerformR::process_player_primes(temp_player_data, base_sports_data)
     stopifnot("Process player primes failed." = is.data.frame(temp_processed_data))
-
-    # Log structure of temp_processed_data if needed for debugging CQI input
-    # message("DEBUG API: Structure of temp_processed_data BEFORE CQI prep:"); str(temp_processed_data)
-    # message("DEBUG API: Head of temp_processed_data:"); print(head(temp_processed_data))
 
     # --- Step 2.5: Explicitly Calculate Scaled Value for fullData ---
     message("INFO: Calculation Step 2.5: Explicitly calculating scaled_value from predicted_value...")
@@ -230,7 +222,6 @@ function(req, res) {
       left_join(traj_minimal, by = c("id", "age"))
 
     stopifnot("Failed to join trajectory data for scaling." = is.data.frame(data_to_scale))
-    # message("DEBUG API: Summary of data_to_scale before scaling:"); print(summary(data_to_scale)) # Optional detailed log
 
     # Perform the Z-score scaling within league/position groups
     scaled_values_calculated <- data_to_scale |>
@@ -251,12 +242,12 @@ function(req, res) {
 
     stopifnot("Scaling calculation failed." = is.data.frame(scaled_values_calculated))
     message(sprintf("INFO: -> Scaled values calculated for %d id-age records.", nrow(scaled_values_calculated)))
-    # message("DEBUG API: Summary of scaled_values_calculated:"); print(summary(scaled_values_calculated)) # Optional detailed log
 
     # --- Update 'fullData' - Start with base data, merge calculated scaled_value ---
     message("INFO: Updating fullData dataframe...")
+    # Start with the base sports data (which is already filtered to players with splines)
     updated_full_data_df <- base_sports_data %>%
-      select(-any_of("scaled_value")) %>%
+      select(-any_of("scaled_value")) %>% # Remove old column if it exists
       left_join(scaled_values_calculated, by = c("id", "age")) %>%
       rename(scaled_value = calculated_scaled_value)
 
@@ -266,44 +257,57 @@ function(req, res) {
     } else {
        num_scaled <- sum(!is.na(updated_full_data_df$scaled_value))
        message(sprintf("INFO: -> Merged calculated 'scaled_value'. %d non-NA values present.", num_scaled))
-       # message("DEBUG API: Summary of scaled_value in updated_full_data_df:"); print(summary(updated_full_data_df$scaled_value)) # Optional
     }
     # --- End scaled_value update ---
 
 
-    # --- Calculate flags based on new spline primes (using the updated_full_data_df)---
-    message("INFO: -> Calculating flags (in_prime, etc.)...")
+    # --- Calculate flags and add prime_duration to updated_full_data_df ---
+    message("INFO: -> Calculating flags (in_prime, etc.) AND adding prime_duration...")
     if (nrow(new_spline_primes_df) > 0 &&
-        all(c("id", "start_age", "end_age", "max_value_age") %in% names(new_spline_primes_df))) {
+        # Check for all required columns from identify_prime output
+        all(c("id", "start_age", "end_age", "max_value_age", "prime_duration") %in% names(new_spline_primes_df))) {
 
       primes_info_to_join <- new_spline_primes_df %>%
-        select(id, prime_start_age = start_age, prime_end_age = end_age, prime_peak_age = max_value_age) %>%
-        distinct(id, .keep_all = TRUE)
+        # Select necessary columns including prime_duration
+        select(id, prime_start_age = start_age, prime_end_age = end_age, prime_peak_age = max_value_age, prime_duration) %>%
+        distinct(id, .keep_all = TRUE) # Ensure one row per player
 
+      # Join prime info into the main data frame
       updated_full_data_df <- updated_full_data_df %>%
         left_join(primes_info_to_join, by = "id") %>%
+        # Ensure numeric types for age comparisons
         mutate(across(c(age, prime_start_age, prime_end_age, prime_peak_age), as.numeric)) %>%
         mutate(
+          # Calculate flags
           in_prime = !is.na(prime_start_age) & !is.na(prime_end_age) & !is.na(age) &
                        age >= prime_start_age & age <= prime_end_age,
           is_peak_age = !is.na(prime_peak_age) & !is.na(age) &
                          abs(age - prime_peak_age) < 1e-6,
           years_from_peak = if_else(!is.na(age) & !is.na(prime_peak_age),
                                     as.integer(round(age - prime_peak_age)),
-                                    NA_integer_)
+                                    NA_integer_),
+          # Ensure prime_duration has correct type and handles potential NAs from join (though unlikely now)
+          prime_duration = if_else(is.na(prime_duration), NA_integer_, as.integer(prime_duration))
         ) %>%
          mutate(
+            # Convert logical flags to character for JSON output consistency
             in_prime = if_else(is.na(in_prime), "false", if_else(in_prime, "true", "false")),
             is_peak_age = if_else(is.na(is_peak_age), "false", if_else(is_peak_age, "true", "false"))
          ) %>%
+        # Remove temporary age columns, KEEP prime_duration
         select(-prime_start_age, -prime_end_age, -prime_peak_age)
 
-      message(sprintf("INFO: -> Full data flags calculated (in_prime: %d T / %d F, is_peak_age: %d T / %d F)",
+      # Optional Debug Log: Check prime_duration summary after join
+      # message("DEBUG API: Summary of prime_duration in updated_full_data_df:")
+      # print(summary(updated_full_data_df$prime_duration))
+
+      message(sprintf("INFO: -> Full data flags & prime_duration added (in_prime: %d T / %d F, is_peak_age: %d T / %d F)",
                       sum(updated_full_data_df$in_prime == "true", na.rm=TRUE), sum(updated_full_data_df$in_prime == "false", na.rm=TRUE),
                       sum(updated_full_data_df$is_peak_age == "true", na.rm=TRUE), sum(updated_full_data_df$is_peak_age == "false", na.rm=TRUE)))
 
     } else {
-      message("WARN: Spline primes data empty or missing required columns. Setting flags to FALSE/NA in fullData.")
+      message("WARN: Spline primes data empty or missing required columns. Setting flags/prime_duration to FALSE/NA in fullData.")
+      # Ensure flag columns exist even if primes are missing
       if (!"in_prime" %in% names(updated_full_data_df)) updated_full_data_df$in_prime <- "false"
       else updated_full_data_df$in_prime <- ifelse(is.na(updated_full_data_df$in_prime), "false", updated_full_data_df$in_prime)
 
@@ -312,31 +316,38 @@ function(req, res) {
 
       if (!"years_from_peak" %in% names(updated_full_data_df)) updated_full_data_df$years_from_peak <- NA_integer_
       else updated_full_data_df$years_from_peak[is.na(updated_full_data_df$years_from_peak)] <- NA_integer_
+
+      # Add prime_duration as NA if it doesn't exist
+      if (!"prime_duration" %in% names(updated_full_data_df)) updated_full_data_df$prime_duration <- NA_integer_
+       else updated_full_data_df$prime_duration[is.na(updated_full_data_df$prime_duration)] <- NA_integer_
     }
     # --- End flag calculation ---
 
     # --- Final Check: Ensure ALL required columns exist before proceeding ---
+    # Added prime_duration to required columns
     required_cols <- c("id", "player_name", "age", "league", "sport", "position",
                        "scaled_value", "in_prime", "is_peak_age", "years_from_peak",
-                       "games_played")
+                       "games_played", "prime_duration")
     missing_cols <- required_cols[!required_cols %in% names(updated_full_data_df)]
     if(length(missing_cols) > 0) {
         for(col in missing_cols) {
            message(sprintf("WARN: Final Check - Adding missing required column '%s' as NA.", col))
            if (col %in% c("scaled_value", "games_played")) { updated_full_data_df[[col]] <- NA_real_ }
-           else if (col == "years_from_peak") { updated_full_data_df[[col]] <- NA_integer_ }
+           # Correctly handle integer columns
+           else if (col %in% c("years_from_peak", "prime_duration")) { updated_full_data_df[[col]] <- NA_integer_ }
            else if (col %in% c("in_prime", "is_peak_age")) { updated_full_data_df[[col]] <- "false" }
            else { updated_full_data_df[[col]] <- NA_character_ }
         }
         final_missing <- required_cols[!required_cols %in% names(updated_full_data_df)]
         if(length(final_missing) > 0) {
+           # This is a critical failure, stop execution
            stop(paste("FATAL: Final updated_full_data_df STILL missing required columns after adding NAs:", paste(final_missing, collapse=", ")))
         }
     }
     message("INFO: -> Final column check passed for updated_full_data_df.")
     # --- End Final Check ---
 
-    # --- NEW: Get Valid IDs from Trajectory Data ---
+    # --- Get Valid IDs from Trajectory Data ---
     message("INFO: Getting valid player IDs from trajectory data...")
     valid_trajectory_ids <- character(0)
     if (exists("PLAYER_TRAJECTORIES", envir = .API_ENV) && "id" %in% names(.API_ENV$PLAYER_TRAJECTORIES)) {
@@ -344,18 +355,14 @@ function(req, res) {
         message(sprintf("INFO: Found %d unique player IDs in PLAYER_TRAJECTORIES.", length(valid_trajectory_ids)))
     } else {
         message("WARN: PLAYER_TRAJECTORIES or its 'id' column not found. Cannot filter CQI input by trajectory IDs.")
-        # If this happens, the API might still run but CQI warnings/issues could persist.
-        # The initial health check should ideally prevent this scenario if data is critical.
     }
     # --- End Get Valid IDs ---
 
 
     # --- Step 3: PQI Calculation ---
     message("INFO: Calculation Step 3: Calculating PQI...")
-    # Uses temp_processed_data which is derived indirectly from base data AND new spline primes
     pqi_calculated_df <- peakPerformR::calculate_prime_quality_index(temp_processed_data, nfl_by_position = TRUE, tier_method = "percentile")
     stopifnot("PQI calculation failed." = is.data.frame(pqi_calculated_df))
-    # Rename safely
     if (nrow(pqi_calculated_df) > 0 && all(c("prime_tier", "pqi_score") %in% names(pqi_calculated_df))) {
       pqi_calculated_df <- pqi_calculated_df %>% rename(selected_tier = prime_tier, pqi_selected = pqi_score)
     } else {
@@ -370,39 +377,53 @@ function(req, res) {
     message("INFO: Calculation Step 4: Calculating CQI...")
     # Prepare base data needed for CQI
     base_traj_minimal <- base_trajectory_data %>% select(id, age, predicted_value) %>% distinct(id, age, .keep_all = TRUE)
-    # !!! REVISIT THIS !!! Ensure `career_avg_tier` is the correct column from `process_player_primes`
-    processed_minimal <- temp_processed_data %>% select(id, career_avg_tier) %>% distinct(id, .keep_all=TRUE)
+    # Select necessary columns from processed data - ENSURE 'career_avg_tier' IS CORRECT
+    # !!! Check if `process_player_primes` actually produces 'career_avg_tier' !!!
+    processed_cols_to_select <- intersect(c("id", "career_avg_tier"), names(temp_processed_data))
+    if (!"career_avg_tier" %in% processed_cols_to_select) {
+        message("WARN: 'career_avg_tier' not found in temp_processed_data. Joining may fail or column will be NA.")
+        # Handle this gracefully, maybe add an NA column if critical for CQI function?
+        processed_minimal <- temp_processed_data %>% select(id) %>% distinct(id, .keep_all=TRUE) %>% mutate(career_avg_tier = NA_character_)
+    } else {
+        processed_minimal <- temp_processed_data %>% select(all_of(processed_cols_to_select)) %>% distinct(id, .keep_all=TRUE)
+    }
     message("DEBUG API: Check 'career_avg_tier' exists in temp_processed_data: ", "career_avg_tier" %in% names(temp_processed_data))
 
+
+    # Create the base data for CQI input
+    # Note: updated_full_data_df now contains prime_duration
     data_for_cqi <- updated_full_data_df %>%
                         left_join(base_traj_minimal, by = c("id","age")) %>%
-                        left_join(processed_minimal, by = "id") # Join potentially problematic processed data
+                        left_join(processed_minimal, by = "id")
     stopifnot("Data preparation for CQI failed (check columns)." = is.data.frame(data_for_cqi))
     message(sprintf("INFO: Prepared data_for_cqi with %d rows (before filtering).", nrow(data_for_cqi)))
 
-    # --- NEW FILTERING STEP for CQI Input ---
+    # --- FILTERING STEP for CQI Input ---
     data_for_cqi_filtered <- data_for_cqi
     if (length(valid_trajectory_ids) > 0) {
-        message(sprintf("INFO: Filtering data_for_cqi to include only %d valid trajectory IDs.", length(valid_trajectory_ids)))
+        n_unique_ids_before_cqi_filter <- length(unique(data_for_cqi_filtered$id))
+        message(sprintf("INFO: Filtering data_for_cqi (containing %d unique IDs) to include only %d valid trajectory IDs.", n_unique_ids_before_cqi_filter, length(valid_trajectory_ids)))
         data_for_cqi_filtered <- data_for_cqi %>%
                                    dplyr::filter(id %in% valid_trajectory_ids)
-        message(sprintf("INFO: Rows remaining in data_for_cqi after filtering: %d", nrow(data_for_cqi_filtered)))
+        n_unique_ids_after_cqi_filter <- length(unique(data_for_cqi_filtered$id))
+        message(sprintf("INFO: Rows remaining in data_for_cqi after filtering: %d. Unique IDs remaining: %d", nrow(data_for_cqi_filtered), n_unique_ids_after_cqi_filter))
     } else {
         message("WARN: Skipping filtering of CQI data as no valid trajectory IDs were found.")
     }
-    # --- END NEW FILTERING STEP ---
+    # Add check for number of unique IDs being passed
+    n_unique_ids_passed <- length(unique(data_for_cqi_filtered$id))
+    message(sprintf("DEBUG API: Number of UNIQUE IDs in data_for_cqi_filtered being passed to CQI function: %d", n_unique_ids_passed))
 
-    # Log structure/head of the *filtered* data being passed to CQI function
-    # message("DEBUG API: Structure of data_for_cqi_filtered RIGHT BEFORE calculate_career_quality_index:"); str(data_for_cqi_filtered)
-    # message("DEBUG API: Head of data_for_cqi_filtered:"); print(head(data_for_cqi_filtered))
-    # message("DEBUG API: Checking required CQI columns in data_for_cqi_filtered...")
-    # required_cols_cqi <- c("id","player_name","sport","position","league","season","games_played","age", "scaled_value")
-    # print(sapply(required_cols_cqi, function(col) col %in% names(data_for_cqi_filtered)))
+    # Add check for prime_duration column presence
+    message("DEBUG API: Checking for 'prime_duration' column before CQI call: ", "prime_duration" %in% names(data_for_cqi_filtered))
+    # Optional: summary of prime_duration if present
+    # if("prime_duration" %in% names(data_for_cqi_filtered)) print(summary(data_for_cqi_filtered$prime_duration))
 
 
     # --- Call CQI function with FILTERED data ---
+    # Ensure calculate_career_quality_index uses the prime_duration column
     cqi_calculated_df <- peakPerformR::calculate_career_quality_index(
-        data_for_cqi_filtered, # Use the filtered data frame
+        player_data = data_for_cqi_filtered, # Use the filtered data frame
         nfl_by_position = FALSE, # Your setting
         tier_method = "percentile",
         exclude_positions = c("OL", "SPEC"), # Your setting
@@ -446,7 +467,7 @@ function(req, res) {
       success = TRUE, message = "Recalculation successful.", parameters = current_params,
       dataSummary = list(rawPrimesCount = nrow(new_raw_primes_df), splinePrimesCount = nrow(new_spline_primes_df), pqiCount = nrow(pqi_final_df), cqiCount = nrow(cqi_final_df), fullDataRows = nrow(updated_full_data_df)),
       rawPrimes = new_raw_primes_df, splinePrimes = new_spline_primes_df, pqi = pqi_final_df, cqi = cqi_final_df,
-      fullData = updated_full_data_df # Return the dataframe with the *newly calculated* scaled_value
+      fullData = updated_full_data_df # Return the dataframe with the newly calculated scaled_value AND prime_duration
     )
 
   }, error = function(e) { # Catch errors from ANY calculation step
@@ -454,10 +475,7 @@ function(req, res) {
     message("ERROR: ", error_message)
     tb <- tryCatch(rlang::trace_back(bottom = sys.frame(1)), error = function(e_tb) "Traceback not available")
     message("ERROR Traceback:\n", paste(capture.output(print(tb)), collapse = "\n"))
-    # Ensure the error is returned to be handled in the final response preparation
-    # Do NOT return a generic list here, let the error propagate
-    # Return the error object itself
-     # e <- simpleError(error_message) # Optionally wrap it if needed
+    # Return the error object itself to be handled below
      return(e)
   }) # End main calculation tryCatch
 
@@ -466,7 +484,6 @@ function(req, res) {
   if (inherits(calculation_result, "error")) {
     res$status <- 500 # Internal Server Error
     results$success <- FALSE
-    # Use the actual error message from the calculation
     results$message <- paste("Internal server error during calculation:", calculation_result$message)
     results$rawPrimes <- list(); results$splinePrimes <- list(); results$pqi <- list(); results$cqi <- list(); results$fullData = list()
     final_response_list <- results
@@ -477,8 +494,7 @@ function(req, res) {
       results$message <- "Internal server error: Calculation returned unexpected structure."
       results$rawPrimes <- list(); results$splinePrimes <- list(); results$pqi <- list(); results$cqi <- list(); results$fullData = list()
       final_response_list <- results
-  }
-   else {
+  } else {
     # Calculation was successful and returned the expected list structure
     final_response_list <- calculation_result
     res$status <- 200 # OK
@@ -498,9 +514,8 @@ function(req, res) {
     error_msg_json <- "Internal server error: Failed to serialize results to JSON."
     message("CRITICAL ERROR: ", error_msg_json, " JSON Error: ", conditionMessage(e));
     res$status <- 500
-    # Manually construct a safe JSON error response
     sprintf('{"success": false, "message": "%s", "parameters": %s, "dataSummary": {}, "rawPrimes": [], "splinePrimes": [], "pqi": [], "cqi": [], "fullData": []}',
-            gsub('"', '\\\\"', error_msg_json), # Basic JSON escaping for the message
+            gsub('"', '\\\\"', error_msg_json),
             jsonlite::toJSON(current_params, auto_unbox = TRUE, na = "null") %||% '{}'
     )
   })
