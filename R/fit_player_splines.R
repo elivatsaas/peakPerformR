@@ -1,7 +1,7 @@
-#' Fit a Smoothing Spline to Player Performance Data 
+#' Fit a Smoothing Spline to Player Performance Data (Revised v11 - Predict Inside Loop for Peak Rule Check)
 #'
 #' @description
-#' Creates a smoothing spline model... Version 11 performs the 'Entry Peak Rule'
+#' Creates a smoothing spline model.. 
 #' check IMMEDIATELY after a candidate spline fit passes the [min, max] df constraint,
 #' by generating predictions within the fitting loop. Only fits passing BOTH df
 #' AND the entry peak rule are considered for selection based on RSS or preference order.
@@ -21,14 +21,14 @@
 #'
 #' @importFrom dplyr filter arrange summarise lag lead mutate if_else first last n desc pull slice_max slice_min lag group_by ungroup row_number case_when distinct between
 #' @importFrom stats smooth.spline lm predict poly sd quantile weighted.mean residuals
-#' @importFrom magrittr %>%
+#' @importFrom magrittr |>
 #' @importFrom tidyr drop_na
 #' @importFrom rlang .data
 #'
 #' @examples
 #' \dontrun{
 #' # Assume all_sports_tidy is loaded
-#' drose_data <- all_sports_tidy %>% filter(grepl("errick Rose", player_name, ignore.case = TRUE))
+#' drose_data <- all_sports_tidy |> filter(grepl("errick Rose", player_name, ignore.case = TRUE))
 #'
 #' # Define the function below in your session first!
 #' spline_fit_drose <- fit_player_splines(drose_data, verbose = TRUE) # Call the function
@@ -39,13 +39,16 @@
 #' }
 #' }
 #' @export
+# --- Sharp Peak Detection Using Normalized Mean ---
 fit_player_splines <- function(player_data, min_knots = 3, max_knots = 8,
-                               peak_ratio_threshold = 3.0,
+                               peak_threshold = 0.7,
                                sharp_peak_method_weight = 5,
                                fallback_method4_spar = 0.4,
                                verbose = FALSE) {
 
   player_name <- if (nrow(player_data) > 0 && "player_name" %in% names(player_data)) player_data$player_name[1] else "Unknown Player"
+  league <- if (nrow(player_data) > 0 && "league" %in% names(player_data)) player_data$league[1] else NA_character_
+  position <- if (nrow(player_data) > 0 && "position" %in% names(player_data)) player_data$position[1] else NA_character_
 
   # --- Initial Data Cleaning and Checks ---
   player_data_orig <- player_data %>% dplyr::filter(!is.na(player_value), !is.na(age)) %>% dplyr::arrange(age)
@@ -55,21 +58,115 @@ fit_player_splines <- function(player_data, min_knots = 3, max_knots = 8,
   max_knots <- min(max_knots, n_obs); max_knots <- max(max_knots, min_knots)
   if(min_knots > max_knots) { if(verbose) message("Infeasible final df range..."); return(NULL) }
 
-  # --- Stricter Sharp Peak Detection Logic (Ratio-Based) ---
+  # --- Range-Adjusted Sharp Peak Detection Logic ---
   is_sharp_peak_career <- FALSE; peak_info <- NULL
   peak_detection_data <- player_data_orig %>% tidyr::drop_na(player_value)
+
   if(nrow(peak_detection_data) >= 5) {
-    peak_info <- peak_detection_data %>% dplyr::slice_max(order_by = .data$player_value, n = 1, with_ties = FALSE)
-    # (rest of detection logic as in v10...)
-    if (nrow(peak_info) == 1 && !is.na(peak_info$player_value) && !is.na(peak_info$age)) { peak_val <- peak_info$player_value; peak_age <- peak_info$age; avg_non_peak <- NA_real_; non_peak_data <- peak_detection_data %>% dplyr::filter(.data$age != peak_age); if (nrow(non_peak_data) > 0) { avg_non_peak <- mean(non_peak_data$player_value, na.rm = TRUE) }; if (!is.na(avg_non_peak) && avg_non_peak > 1e-6) { if ((peak_val / avg_non_peak) >= peak_ratio_threshold) { is_sharp_peak_career <- TRUE; if(verbose) message("  Sharp peak DETECTED...") } else { if(verbose) { message("  Sharp peak NOT detected...") } } } else { if(verbose) message("  Sharp peak NOT detected...") } } else { if(verbose) message("  Could not uniquely identify peak...") }
-  } else { if(verbose) message("  Not enough non-NA data points...") }
+    # Find min, max, and range of player's career
+    min_val <- min(peak_detection_data$player_value, na.rm = TRUE)
+    max_val <- max(peak_detection_data$player_value, na.rm = TRUE)
+    value_range <- max_val - min_val
+
+    # Find the peak value and age
+    peak_info <- peak_detection_data %>%
+      dplyr::slice_max(order_by = .data$player_value, n = 1, with_ties = FALSE)
+
+    if (nrow(peak_info) == 1 && !is.na(peak_info$player_value) && !is.na(peak_info$age)) {
+      peak_val <- peak_info$player_value
+      peak_age <- peak_info$age
+
+      # Skip if range is too small
+      if (value_range > 1e-6) {
+        # Get non-peak seasons
+        non_peak_data <- peak_detection_data %>% dplyr::filter(.data$age != peak_age)
+
+        if (nrow(non_peak_data) > 0) {
+          # Calculate average of non-peak seasons
+          avg_non_peak <- mean(non_peak_data$player_value, na.rm = TRUE)
+
+          if (!is.na(avg_non_peak)) {
+            # Calculate how prominent the peak is relative to the player's range
+            # This adjusts for different scales across sports
+            peak_prominence <- (peak_val - avg_non_peak) / value_range
+
+            if(verbose) {
+              message(paste("  League:", league, "Position:", position))
+              message(paste("  Min value:", round(min_val, 1), "Max value:", round(max_val, 1),
+                            "Range:", round(value_range, 1)))
+              message(paste("  Peak value:", round(peak_val, 2), "at age", peak_age))
+              message(paste("  Average non-peak value:", round(avg_non_peak, 2)))
+              message(paste("  Peak prominence:", round(peak_prominence, 3),
+                            "(peak is", round(peak_prominence*100, 1), "% of player's range above average)"))
+            }
+
+            # Determine if this is a sharp peak career based on prominence
+            if (peak_prominence >= peak_threshold) {
+              is_sharp_peak_career <- TRUE
+              if(verbose) message("  Sharp peak DETECTED (peak prominence exceeds threshold)...")
+            } else {
+              if(verbose) message("  Sharp peak NOT detected (below threshold)...")
+            }
+          } else {
+            if(verbose) message("  Sharp peak NOT detected (invalid average)...")
+          }
+        } else {
+          if(verbose) message("  Not enough non-peak data for comparison...")
+        }
+      } else {
+        if(verbose) message("  Player has minimal variation in performance...")
+      }
+    } else {
+      if(verbose) message("  Could not uniquely identify peak...")
+    }
+  } else {
+    if(verbose) message("  Not enough data points for peak detection...")
+  }
 
   # --- Helper Function: Check Entry Year Peak Rule ---
-  # (Keep helper function exactly as in v9/v10)
-  check_entry_peak_rule <- function(model_to_check, original_data, peak_info_for_rule) { # Pass peak_info
-    # ... (function code as in v9/v10, using peak_info_for_rule for actual peak) ...
-    if (is.null(model_to_check) || !inherits(model_to_check, "smooth.spline") || nrow(original_data) < 1 || is.null(peak_info_for_rule)) return(FALSE); entry_age <- dplyr::first(original_data$age); actual_peak_age <- peak_info_for_rule$age; pred_ages <- sort(unique(original_data$age)); if(length(pred_ages) < 2) return(FALSE); predictions <- tryCatch({ stats::predict(model_to_check, x = pred_ages) }, error = function(e){ NULL }); if(is.null(predictions) || is.null(predictions$y) || length(predictions$y) != length(pred_ages)) { if(verbose) message("    Rule Check Warning: Prediction failed."); return(FALSE) }; predicted_traj <- dplyr::tibble(age = predictions$x, predicted_value = predictions$y); predicted_peak <- predicted_traj %>% dplyr::filter(!is.na(predicted_value)) %>% dplyr::slice_max(order_by = predicted_value, n = 1, with_ties = FALSE); predicted_peak_age <- if(nrow(predicted_peak) == 1) predicted_peak$age else NA; if(is.na(predicted_peak_age) || is.na(actual_peak_age)) { if(verbose) message("    Rule Check Note: Cannot determine peak ages..."); return(TRUE) }; violates_rule <- (predicted_peak_age == entry_age) && (actual_peak_age != entry_age); passes_rule <- !violates_rule; if(verbose && violates_rule) message("    Rule Check Failed: Predicted peak at entry age (", entry_age, ") but actual peak was at age ", actual_peak_age, "."); if(verbose && passes_rule && !is.na(predicted_peak_age) && !is.na(actual_peak_age)) message("    Rule Check Passed."); return(passes_rule)
+  check_entry_peak_rule <- function(model_to_check, original_data, peak_info_for_rule) {
+    if (is.null(model_to_check) || !inherits(model_to_check, "smooth.spline") || nrow(original_data) < 1 || is.null(peak_info_for_rule)) return(FALSE)
+    entry_age <- dplyr::first(original_data$age)
+    actual_peak_age <- peak_info_for_rule$age
+    pred_ages <- sort(unique(original_data$age))
+    if(length(pred_ages) < 2) return(FALSE)
+
+    predictions <- tryCatch({
+      stats::predict(model_to_check, x = pred_ages)
+    }, error = function(e){
+      NULL
+    })
+
+    if(is.null(predictions) || is.null(predictions$y) || length(predictions$y) != length(pred_ages)) {
+      if(verbose) message("    Rule Check Warning: Prediction failed.")
+      return(FALSE)
+    }
+
+    predicted_traj <- dplyr::tibble(age = predictions$x, predicted_value = predictions$y)
+    predicted_peak <- predicted_traj %>%
+      dplyr::filter(!is.na(predicted_value)) %>%
+      dplyr::slice_max(order_by = predicted_value, n = 1, with_ties = FALSE)
+
+    predicted_peak_age <- if(nrow(predicted_peak) == 1) predicted_peak$age else NA
+
+    if(is.na(predicted_peak_age) || is.na(actual_peak_age)) {
+      if(verbose) message("    Rule Check Note: Cannot determine peak ages...")
+      return(TRUE)
+    }
+
+    violates_rule <- (predicted_peak_age == entry_age) && (actual_peak_age != entry_age)
+    passes_rule <- !violates_rule
+
+    if(verbose && violates_rule)
+      message("    Rule Check Failed: Predicted peak at entry age (", entry_age,
+              ") but actual peak was at age ", actual_peak_age, ".")
+
+    if(verbose && passes_rule && !is.na(predicted_peak_age) && !is.na(actual_peak_age))
+      message("    Rule Check Passed.")
+
+    return(passes_rule)
   }
+
 
 
   selected_fit_details <- NULL # Final selected fit passing BOTH rules
