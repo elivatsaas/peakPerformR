@@ -5,7 +5,8 @@
 [![R](https://img.shields.io/badge/R-4.0%2B-blue.svg)](https://www.r-project.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-🔗 **[Interactive Dashboard](https://github.com/elivatsaas/peakPerformR-dashboard)**
+🔗 **[Interactive Dashboard Github](https://github.com/elivatsaas/peakPerformR-dashboard)**
+🔗 **[Interactive Dashboard](https://elivatsaas.github.io/peakPerformR-dashboard/)**
 
 ---
 
@@ -149,4 +150,4 @@ MIT License - Copyright (c) 2025 Jacob Berlin and Eli Vatsaas
 
 ---
 
-**🔗 Explore the findings interactively with our [Dashboard](https://github.com/elivatsaas/peakPerformR-dashboard)**
+**🔗 Explore the findings interactively with our [Dashboard](https://elivatsaas.github.io/peakPerformR-dashboard/)**
