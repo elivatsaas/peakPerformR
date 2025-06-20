@@ -146,7 +146,7 @@ league_comparison <- all_sports_tidy %>%
 
 ## License
 
-MIT License - Copyright (c) 2025 Jacob Berlin and Eli Vatsaas
+MIT License - see [LICENSE](LICENSE) file for details.
 
 ---
 
